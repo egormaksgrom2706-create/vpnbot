@@ -76,29 +76,80 @@ def build_subscription_url(settings, sub_key: str | None) -> str:
 
 
 def build_main_keyboard(settings, is_admin: bool) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    rows.append(
-        [
-            InlineKeyboardButton("Мои Подписки", callback_data="subs:list"),
-            InlineKeyboardButton("Купить Подписку", callback_data="shop:plans"),
+    rows: list[list[InlineKeyboardButton]] =[]
+    
+    rows.append([
+            InlineKeyboardButton(
+                text="Мои Подписки", 
+                callback_data="subs:list",
+                style="success",
+                icon_custom_emoji_id="6034923938486684992"
+            ),
+            InlineKeyboardButton(
+                text="Купить Подписку", 
+                callback_data="shop:plans",
+                style="success",
+                icon_custom_emoji_id="5891105528356018797"
+            ),
         ]
     )
-    rows.append([InlineKeyboardButton("Подарить", callback_data="shop:gift")])
-    rows.append(
-        [
-            InlineKeyboardButton("Баланс", callback_data="main:balance"),
-            InlineKeyboardButton("Устройства", callback_data="main:devices"),
+    
+    rows.append([
+            InlineKeyboardButton(
+                text="Подарить", 
+                callback_data="shop:gift",
+                icon_custom_emoji_id="5773677501825945508"
+            )
         ]
     )
-    rows.append(
-        [
-            InlineKeyboardButton("Поделится подпиской", callback_data="main:share"),
-            InlineKeyboardButton("Партнёрская программа", callback_data="ref:menu"),
+    
+    rows.append([
+            InlineKeyboardButton(
+                text="Баланс", 
+                callback_data="main:balance",
+                icon_custom_emoji_id="5904462880941545555"
+            ),
+            InlineKeyboardButton(
+                text="Устройства", 
+                callback_data="main:devices",
+                icon_custom_emoji_id="6039605143601680423"
+            ),
         ]
     )
-    rows.append([InlineKeyboardButton("Поддержка", url=settings.support_link)])
+    
+    rows.append([
+            InlineKeyboardButton(
+                text="Поделится подпиской", 
+                callback_data="main:share",
+                icon_custom_emoji_id="6033125983572201397"
+            ),
+            InlineKeyboardButton(
+                text="Партнёрская программа", 
+                callback_data="ref:menu",
+                icon_custom_emoji_id="5890848474563352982"
+            ),
+        ]
+    )
+    
+    rows.append([
+            InlineKeyboardButton(
+                text="Поддержка", 
+                url=settings.support_link,
+                style="danger",
+                icon_custom_emoji_id="6028346797368283073"
+            )
+        ]
+    )
+    
     if is_admin:
-        rows.append([InlineKeyboardButton("Админ-панель", callback_data="admin:menu")])
+        rows.append([
+                InlineKeyboardButton(
+                    text="Админ-панель", 
+                    callback_data="admin:menu"
+                )
+            ]
+        )
+        
     return InlineKeyboardMarkup(rows)
 
 

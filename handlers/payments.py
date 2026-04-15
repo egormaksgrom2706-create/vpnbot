@@ -113,13 +113,15 @@ async def activate_plan(
         return None
 
     expire_at = utcnow() + timedelta(days=int(plan["duration_days"]))
+    remna_username = f"tg_{beneficiary_id}_{int(utcnow().timestamp())}"
     try:
-        user_uuid = await remna.create_user(f"tg_{beneficiary_id}")
-        response = await remna.create_subscription(
-            user_uuid=user_uuid,
+        response = await remna.provision_access(
+            username=remna_username,
             traffic_limit_bytes=int(plan["traffic_gb"]) * 1024**3,
             expire_at=expire_at,
             devices_limit=int(plan["devices_limit"]),
+            telegram_id=beneficiary_id,
+            description=f"Telegram user {beneficiary_id}",
         )
     except Exception:
         logger.exception("Ошибка выдачи подписки через RemnaWave пользователю %s", beneficiary_id)
@@ -132,7 +134,7 @@ async def activate_plan(
         return None
 
     sub_key = response.get("sub_key") or response.get("key") or ""
-    remna_sub_id = response.get("sub_id") or response.get("id") or ""
+    remna_sub_id = response.get("remna_id") or response.get("uuid") or response.get("sub_id") or response.get("id") or ""
     subscription_id = await db.add_subscription(
         user_id=beneficiary_id,
         plan_id=int(plan["id"]),

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from urllib.parse import urlparse
 
 import httpx
 
@@ -49,10 +50,61 @@ class RemnaWaveClient:
             raise RuntimeError("RemnaWave client is not started")
         return self._client
 
+    async def provision_access(
+        self,
+        username: str,
+        traffic_limit_bytes: int,
+        expire_at: datetime,
+        devices_limit: int,
+        telegram_id: int | None = None,
+        description: str | None = None,
+    ) -> dict[str, str]:
+        modern_payload = {
+            "username": username,
+            "status": "ACTIVE",
+            "trafficLimitBytes": int(traffic_limit_bytes),
+            "trafficLimitStrategy": "NO_RESET",
+            "expireAt": expire_at.isoformat(),
+            "hwidDeviceLimit": int(devices_limit),
+        }
+        if telegram_id is not None:
+            modern_payload["telegramId"] = int(telegram_id)
+        if description:
+            modern_payload["description"] = description
+
+        try:
+            response = await self._request("POST", "/api/users", json=modern_payload)
+            response.raise_for_status()
+            data = self._unwrap_response(response)
+            normalized = self._normalize_user_response(data)
+            if normalized["uuid"]:
+                return normalized
+            raise RuntimeError("RemnaWave create-user response does not contain uuid")
+        except Exception as exc:
+            logger.warning("Modern RemnaWave create-user flow failed, falling back to legacy API: %s", exc)
+
+        user_uuid = await self.create_user(username)
+        legacy = await self.create_subscription(
+            user_uuid=user_uuid,
+            traffic_limit_bytes=traffic_limit_bytes,
+            expire_at=expire_at,
+            devices_limit=devices_limit,
+        )
+        subscription_url = str(legacy.get("subscription_url") or legacy.get("subscriptionUrl") or "")
+        return {
+            "uuid": user_uuid,
+            "remna_id": str(legacy.get("sub_id") or legacy.get("id") or user_uuid),
+            "sub_key": str(legacy.get("sub_key") or legacy.get("key") or self._extract_subscription_key(subscription_url)),
+            "subscription_url": subscription_url,
+        }
+
     async def create_user(self, label: str) -> str:
         response = await self._request("POST", "/api/users", json={"label": label})
         response.raise_for_status()
-        return response.json()["uuid"]
+        data = self._unwrap_response(response)
+        if isinstance(data, dict):
+            return str(data.get("uuid") or data.get("id") or "")
+        raise RuntimeError("Unexpected RemnaWave create-user response")
 
     async def create_subscription(
         self,
@@ -72,12 +124,35 @@ class RemnaWaveClient:
             },
         )
         response.raise_for_status()
-        return response.json()
+        data = self._unwrap_response(response)
+        if isinstance(data, dict):
+            return data
+        raise RuntimeError("Unexpected RemnaWave create-subscription response")
 
     async def get_subscription(self, sub_id: str) -> dict:
+        try:
+            response = await self._request("GET", f"/api/users/{sub_id}")
+            response.raise_for_status()
+            data = self._unwrap_response(response)
+            if isinstance(data, dict):
+                return {
+                    "traffic_used_bytes": int(
+                        data.get("usedTrafficBytes")
+                        or data.get("trafficUsedBytes")
+                        or data.get("traffic_used_bytes")
+                        or 0
+                    ),
+                    "devices": data.get("activeDevices") or data.get("devices") or [],
+                }
+        except Exception:
+            logger.warning("Modern RemnaWave get-user flow failed for %s, trying legacy subscription API", sub_id)
+
         response = await self._request("GET", f"/api/subscriptions/{sub_id}")
         response.raise_for_status()
-        return response.json()
+        data = self._unwrap_response(response)
+        if isinstance(data, dict):
+            return data
+        raise RuntimeError("Unexpected RemnaWave get-subscription response")
 
     async def disconnect_device(self, sub_id: str, device_id: str) -> None:
         response = await self._request("DELETE", f"/api/subscriptions/{sub_id}/devices/{device_id}")
@@ -126,6 +201,36 @@ class RemnaWaveClient:
         if last_error:
             raise last_error
         raise RuntimeError("RemnaWave request failed without a captured exception")
+
+    @staticmethod
+    def _unwrap_response(response: httpx.Response) -> dict | list:
+        payload = response.json()
+        if isinstance(payload, dict) and "response" in payload:
+            return payload["response"]
+        return payload
+
+    @staticmethod
+    def _extract_subscription_key(subscription_url: str) -> str:
+        if not subscription_url:
+            return ""
+        path = urlparse(subscription_url).path.strip("/")
+        if not path:
+            return ""
+        return path.rsplit("/", 1)[-1]
+
+    def _normalize_user_response(self, data: dict) -> dict[str, str]:
+        subscription_url = str(data.get("subscriptionUrl") or data.get("subscription_url") or "")
+        return {
+            "uuid": str(data.get("uuid") or data.get("id") or ""),
+            "remna_id": str(data.get("shortUuid") or data.get("short_uuid") or data.get("id") or data.get("uuid") or ""),
+            "sub_key": str(
+                data.get("subscriptionUuid")
+                or data.get("sub_key")
+                or data.get("key")
+                or self._extract_subscription_key(subscription_url)
+            ),
+            "subscription_url": subscription_url,
+        }
 
     @staticmethod
     def build_subscription_url(base_url: str, sub_key: str) -> str:
