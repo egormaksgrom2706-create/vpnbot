@@ -40,6 +40,8 @@ class Settings:
     remna_trust_env: bool
     remna_fallback_urls: list[str]
     remna_host_header: str
+    remna_cookie: str
+    remna_active_internal_squads: list[str]
 
     @property
     def support_link(self) -> str:
@@ -72,4 +74,10 @@ def get_settings() -> Settings:
         remna_trust_env=os.getenv("REMNA_TRUST_ENV", "0").strip() in {"1", "true", "True"},
         remna_fallback_urls=fallback_urls,
         remna_host_header=os.getenv("REMNA_HOST_HEADER", "").strip(),
+        remna_cookie=os.getenv("REMNA_COOKIE", "").strip(),
+        remna_active_internal_squads=[
+            uuid.strip()
+            for uuid in os.getenv("REMNA_ACTIVE_INTERNAL_SQUADS", "").split(",")
+            if uuid.strip()
+        ],
     )

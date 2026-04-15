@@ -115,7 +115,7 @@ async def start_crypto_buy(update: Update, context: ContextTypes.DEFAULT_TYPE, p
         ),
         InlineKeyboardMarkup(
             [
-                [InlineKeyboardButton("💳 Оплатить счет", url=pay_url)],
+                [InlineKeyboardButton("💳 Оплатить счет", url=pay_url or "https://t.me/CryptoBot")],
                 [InlineKeyboardButton("✅ Проверить оплату", callback_data=f"shop:check:crypto:{payment_id}")],
                 [InlineKeyboardButton("🔙 К тарифам", callback_data="shop:plans")],
             ]

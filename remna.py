@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 import httpx
@@ -20,6 +20,7 @@ class RemnaWaveClient:
         trust_env: bool = False,
         fallback_urls: list[str] | None = None,
         host_header: str = "",
+        cookie: str = "",
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.token = token
@@ -28,6 +29,7 @@ class RemnaWaveClient:
         self.trust_env = trust_env
         self.fallback_urls = [url.rstrip("/") for url in (fallback_urls or []) if url.strip()]
         self.host_header = host_header.strip()
+        self.cookie = cookie.strip()
         self._client: httpx.AsyncClient | None = None
 
     async def start(self) -> None:
@@ -37,6 +39,8 @@ class RemnaWaveClient:
         }
         if self.host_header:
             headers["Host"] = self.host_header
+        if self.cookie:
+            headers["Cookie"] = self.cookie
 
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
@@ -64,45 +68,30 @@ class RemnaWaveClient:
         devices_limit: int,
         telegram_id: int | None = None,
         description: str | None = None,
+        active_internal_squads: list[str] | None = None,
     ) -> dict[str, str]:
         modern_payload = {
             "username": username,
             "status": "ACTIVE",
             "trafficLimitBytes": int(traffic_limit_bytes),
             "trafficLimitStrategy": "NO_RESET",
-            "expireAt": expire_at.isoformat(),
+            "expireAt": self._format_datetime(expire_at),
             "hwidDeviceLimit": int(devices_limit),
         }
         if telegram_id is not None:
             modern_payload["telegramId"] = int(telegram_id)
         if description:
             modern_payload["description"] = description
+        if active_internal_squads:
+            modern_payload["activeInternalSquads"] = active_internal_squads
 
-        try:
-            response = await self._request("POST", "/api/users", json=modern_payload)
-            response.raise_for_status()
-            data = self._unwrap_response(response)
-            normalized = self._normalize_user_response(data)
-            if normalized["uuid"]:
-                return normalized
-            raise RuntimeError("RemnaWave create-user response does not contain uuid")
-        except Exception as exc:
-            logger.warning("Modern RemnaWave create-user flow failed, falling back to legacy API: %s", exc)
-
-        user_uuid = await self.create_user(username)
-        legacy = await self.create_subscription(
-            user_uuid=user_uuid,
-            traffic_limit_bytes=traffic_limit_bytes,
-            expire_at=expire_at,
-            devices_limit=devices_limit,
-        )
-        subscription_url = str(legacy.get("subscription_url") or legacy.get("subscriptionUrl") or "")
-        return {
-            "uuid": user_uuid,
-            "remna_id": str(legacy.get("sub_id") or legacy.get("id") or user_uuid),
-            "sub_key": str(legacy.get("sub_key") or legacy.get("key") or self._extract_subscription_key(subscription_url)),
-            "subscription_url": subscription_url,
-        }
+        response = await self._request("POST", "/api/users", json=modern_payload)
+        response.raise_for_status()
+        data = self._unwrap_response(response)
+        normalized = self._normalize_user_response(data)
+        if normalized["uuid"]:
+            return normalized
+        raise RuntimeError("RemnaWave create-user response does not contain uuid")
 
     async def create_user(self, label: str) -> str:
         response = await self._request("POST", "/api/users", json={"label": label})
@@ -141,17 +130,32 @@ class RemnaWaveClient:
             response.raise_for_status()
             data = self._unwrap_response(response)
             if isinstance(data, dict):
+                traffic = data.get("userTraffic") or {}
                 return {
                     "traffic_used_bytes": int(
-                        data.get("usedTrafficBytes")
+                        traffic.get("usedTrafficBytes")
+                        or data.get("usedTrafficBytes")
                         or data.get("trafficUsedBytes")
                         or data.get("traffic_used_bytes")
                         or 0
                     ),
-                    "devices": data.get("activeDevices") or data.get("devices") or [],
+                    "devices": data.get("hwidDevices") or data.get("activeDevices") or data.get("devices") or [],
                 }
         except Exception:
-            logger.warning("Modern RemnaWave get-user flow failed for %s, trying legacy subscription API", sub_id)
+            logger.warning("RemnaWave get user by uuid failed for %s, trying short uuid and legacy APIs", sub_id)
+
+        try:
+            response = await self._request("GET", f"/api/users/by-short-uuid/{sub_id}")
+            response.raise_for_status()
+            data = self._unwrap_response(response)
+            if isinstance(data, dict):
+                traffic = data.get("userTraffic") or {}
+                return {
+                    "traffic_used_bytes": int(traffic.get("usedTrafficBytes") or data.get("usedTrafficBytes") or 0),
+                    "devices": data.get("hwidDevices") or data.get("activeDevices") or data.get("devices") or [],
+                }
+        except Exception:
+            logger.warning("RemnaWave get user by short uuid failed for %s, trying legacy subscription API", sub_id)
 
         response = await self._request("GET", f"/api/subscriptions/{sub_id}")
         response.raise_for_status()
@@ -178,6 +182,8 @@ class RemnaWaveClient:
                     }
                     if self.host_header:
                         headers["Host"] = self.host_header
+                    if self.cookie:
+                        headers["Cookie"] = self.cookie
                     async with httpx.AsyncClient(
                         base_url=url,
                         timeout=self.timeout,
@@ -229,11 +235,14 @@ class RemnaWaveClient:
 
     def _normalize_user_response(self, data: dict) -> dict[str, str]:
         subscription_url = str(data.get("subscriptionUrl") or data.get("subscription_url") or "")
+        uuid = str(data.get("uuid") or data.get("id") or "")
         return {
-            "uuid": str(data.get("uuid") or data.get("id") or ""),
-            "remna_id": str(data.get("shortUuid") or data.get("short_uuid") or data.get("id") or data.get("uuid") or ""),
+            "uuid": uuid,
+            "remna_id": uuid,
             "sub_key": str(
-                data.get("subscriptionUuid")
+                data.get("shortUuid")
+                or data.get("short_uuid")
+                or data.get("subscriptionUuid")
                 or data.get("sub_key")
                 or data.get("key")
                 or self._extract_subscription_key(subscription_url)
@@ -244,3 +253,9 @@ class RemnaWaveClient:
     @staticmethod
     def build_subscription_url(base_url: str, sub_key: str) -> str:
         return f"{base_url.rstrip('/')}/{sub_key.lstrip('/')}"
+
+    @staticmethod
+    def _format_datetime(value: datetime) -> str:
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")

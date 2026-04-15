@@ -37,12 +37,22 @@ async def create_crypto_invoice(application, payer_id: int, plan, beneficiary_id
         description=f"VPN тариф: {plan['name']}",
         hidden_message="Спасибо за оплату. Подписка будет активирована автоматически.",
     )
-    invoice_id = getattr(invoice, "invoice_id", None)
-    pay_url = getattr(invoice, "pay_url", None)
+    invoice_id = getattr(invoice, "invoice_id", None) or getattr(invoice, "id", None)
+    pay_url = (
+        getattr(invoice, "pay_url", None)
+        or getattr(invoice, "bot_invoice_url", None)
+        or getattr(invoice, "mini_app_invoice_url", None)
+        or getattr(invoice, "web_app_invoice_url", None)
+    )
     if invoice_id is None and isinstance(invoice, dict):
         invoice_id = invoice.get("invoice_id") or invoice.get("id")
     if pay_url is None and isinstance(invoice, dict):
-        pay_url = invoice.get("pay_url") or invoice.get("bot_invoice_url")
+        pay_url = (
+            invoice.get("pay_url")
+            or invoice.get("bot_invoice_url")
+            or invoice.get("mini_app_invoice_url")
+            or invoice.get("web_app_invoice_url")
+        )
     await db.update_payment_status(
         payment_id,
         "PENDING",
@@ -122,6 +132,7 @@ async def activate_plan(
             devices_limit=int(plan["devices_limit"]),
             telegram_id=beneficiary_id,
             description=f"Telegram user {beneficiary_id}",
+            active_internal_squads=settings.remna_active_internal_squads,
         )
     except Exception:
         logger.exception("Ошибка выдачи подписки через RemnaWave пользователю %s", beneficiary_id)
