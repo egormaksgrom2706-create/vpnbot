@@ -186,7 +186,7 @@ def profile_text(user, subscription, settings) -> str:
         expires_at = "не указан"
 
     return (
-        "🦊 <b>Личный кабинет</b>\n\n"
+        "🚀<b>Личный кабинет</b>\n\n"
         "<b>👤 Профиль:</b>\n"
         "<blockquote>"
         f"Имя: {html.escape(user['full_name'] or 'Без имени')}\n"
