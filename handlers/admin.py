@@ -275,6 +275,7 @@ async def start_grant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         return ConversationHandler.END
     query = update.callback_query
     await query.answer()
+    context.user_data["admin_manual_action"] = "grant_user_id"
     await safe_edit(
         query,
         "🎁 <b>Выдать подписку</b>\n\nОтправьте ID пользователя.",
@@ -494,11 +495,33 @@ async def new_plan_devices(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data.pop("admin_manual_action", None)
     if update.callback_query and await admin_guard(update, context):
         await show_admin_menu(update, context)
     elif update.effective_message:
         await update.effective_message.reply_text("Операция отменена.")
     return ConversationHandler.END
+
+
+async def manual_text_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await admin_guard(update, context):
+        return
+    action = context.user_data.get("admin_manual_action")
+    if action != "grant_user_id":
+        return
+
+    text = (update.effective_message.text or "").strip()
+    if not text.isdigit():
+        await update.effective_message.reply_text("⚠️ Нужен числовой ID.")
+        return
+
+    context.user_data.pop("admin_manual_action", None)
+    user_id = int(text)
+    context.user_data["admin_grant_user_id"] = user_id
+    await update.effective_message.reply_text(
+        "Выберите тариф для мгновенной выдачи:",
+        reply_markup=await grant_plans_markup(context, user_id),
+    )
 
 
 async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -592,4 +615,5 @@ def get_handlers():
             per_chat=True,
             per_user=True,
         ),
+        MessageHandler(filters.TEXT & ~filters.COMMAND, manual_text_router),
     ]
