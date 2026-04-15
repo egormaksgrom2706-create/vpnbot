@@ -39,6 +39,7 @@ class Settings:
     remna_verify_ssl: bool
     remna_trust_env: bool
     remna_fallback_urls: list[str]
+    remna_host_header: str
 
     @property
     def support_link(self) -> str:
@@ -70,4 +71,5 @@ def get_settings() -> Settings:
         remna_verify_ssl=os.getenv("REMNA_VERIFY_SSL", "1").strip() not in {"0", "false", "False"},
         remna_trust_env=os.getenv("REMNA_TRUST_ENV", "0").strip() in {"1", "true", "True"},
         remna_fallback_urls=fallback_urls,
+        remna_host_header=os.getenv("REMNA_HOST_HEADER", "").strip(),
     )

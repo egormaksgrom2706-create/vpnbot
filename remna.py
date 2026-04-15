@@ -19,6 +19,7 @@ class RemnaWaveClient:
         verify_ssl: bool = True,
         trust_env: bool = False,
         fallback_urls: list[str] | None = None,
+        host_header: str = "",
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.token = token
@@ -26,16 +27,21 @@ class RemnaWaveClient:
         self.verify_ssl = verify_ssl
         self.trust_env = trust_env
         self.fallback_urls = [url.rstrip("/") for url in (fallback_urls or []) if url.strip()]
+        self.host_header = host_header.strip()
         self._client: httpx.AsyncClient | None = None
 
     async def start(self) -> None:
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "Accept": "application/json",
+        }
+        if self.host_header:
+            headers["Host"] = self.host_header
+
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             timeout=self.timeout,
-            headers={
-                "Authorization": f"Bearer {self.token}",
-                "Accept": "application/json",
-            },
+            headers=headers,
             verify=self.verify_ssl,
             trust_env=self.trust_env,
         )
@@ -166,13 +172,16 @@ class RemnaWaveClient:
                 if index == 0:
                     response = await self.client.request(method, path, **kwargs)
                 else:
+                    headers = {
+                        "Authorization": f"Bearer {self.token}",
+                        "Accept": "application/json",
+                    }
+                    if self.host_header:
+                        headers["Host"] = self.host_header
                     async with httpx.AsyncClient(
                         base_url=url,
                         timeout=self.timeout,
-                        headers={
-                            "Authorization": f"Bearer {self.token}",
-                            "Accept": "application/json",
-                        },
+                        headers=headers,
                         verify=self.verify_ssl,
                         trust_env=self.trust_env,
                     ) as client:

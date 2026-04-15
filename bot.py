@@ -46,6 +46,7 @@ async def main() -> None:
         verify_ssl=settings.remna_verify_ssl,
         trust_env=settings.remna_trust_env,
         fallback_urls=settings.remna_fallback_urls,
+        host_header=settings.remna_host_header,
     )
     await remna.start()
 
