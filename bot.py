@@ -4,6 +4,7 @@ import asyncio
 import logging
 
 from telegram.ext import Application
+from telegram.request import HTTPXRequest
 
 from config import get_settings
 from db import Database
@@ -16,6 +17,14 @@ def configure_logging(level: str) -> None:
     logging.basicConfig(
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
         level=getattr(logging, level.upper(), logging.INFO),
+    )
+
+
+async def log_application_error(update, context) -> None:
+    logging.getLogger("neChezzaBrettkaVPN").exception(
+        "Unhandled telegram update error. update=%s",
+        update,
+        exc_info=context.error,
     )
 
 
@@ -40,11 +49,35 @@ async def main() -> None:
     )
     await remna.start()
 
-    application = Application.builder().token(settings.bot_token).build()
+    telegram_request = HTTPXRequest(
+        connection_pool_size=20,
+        connect_timeout=20.0,
+        read_timeout=60.0,
+        write_timeout=60.0,
+        pool_timeout=20.0,
+        http_version="1.1",
+    )
+    telegram_updates_request = HTTPXRequest(
+        connection_pool_size=10,
+        connect_timeout=20.0,
+        read_timeout=90.0,
+        write_timeout=60.0,
+        pool_timeout=20.0,
+        http_version="1.1",
+    )
+
+    application = (
+        Application.builder()
+        .token(settings.bot_token)
+        .request(telegram_request)
+        .get_updates_request(telegram_updates_request)
+        .build()
+    )
     application.bot_data["settings"] = settings
     application.bot_data["db"] = db
     application.bot_data["remna"] = remna
     application.bot_data["cryptobot"] = payments.build_cryptobot_client(settings) if settings.cryptobot_token else None
+    application.add_error_handler(log_application_error)
 
     for handler in start.get_handlers():
         application.add_handler(handler)
