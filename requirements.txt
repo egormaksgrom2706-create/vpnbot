@@ -1,0 +1,7 @@
+python-telegram-bot[webhooks]>=20.0
+aiosqlite
+httpx
+aiocryptopay
+apscheduler
+python-dotenv
+qrcode[pil]
