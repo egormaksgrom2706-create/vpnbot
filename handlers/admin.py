@@ -30,6 +30,7 @@ WAIT_NEW_PLAN_DAYS = 7
 WAIT_NEW_PLAN_PRICE = 8
 WAIT_NEW_PLAN_TRAFFIC = 9
 WAIT_NEW_PLAN_DEVICES = 10
+WAIT_PLAN_TRAFFIC = 11
 
 
 def is_admin(user_id: int, settings) -> bool:
@@ -62,6 +63,11 @@ def admin_main_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton("🔙 Главное меню", callback_data="profile")],
         ]
     )
+
+
+def format_plan_traffic(plan) -> str:
+    traffic_gb = int(plan["traffic_gb"] or 0)
+    return "Безлимит" if traffic_gb <= 0 else f"{traffic_gb} ГБ"
 
 
 async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -274,12 +280,12 @@ async def start_grant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     if not await admin_guard(update, context):
         return ConversationHandler.END
     query = update.callback_query
-    await query.answer()
     context.user_data["admin_manual_action"] = "grant_user_id"
-    await safe_edit(
-        query,
+    await query.answer("Отправьте ID пользователя", show_alert=True)
+    await query.message.reply_text(
         "🎁 <b>Выдать подписку</b>\n\nОтправьте ID пользователя.",
-        InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data="admin:menu")]]),
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data="admin:menu")]]),
     )
     return WAIT_GRANT_USER_ID
 
@@ -354,7 +360,7 @@ async def show_plans(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     rows: list[list[InlineKeyboardButton]] = []
     for plan in plans:
         status = "✅ Активен" if plan["is_active"] else "❌ Отключён"
-        lines.append(f"• {html.escape(plan['name'])} — {float(plan['price_usdt']):.2f} USDT — {status}")
+        lines.append(f"• {html.escape(plan['name'])} — {float(plan['price_usdt']):.2f} USDT — {format_plan_traffic(plan)} — {status}")
         rows.append([InlineKeyboardButton(f"✏️ {plan['name']}", callback_data=f"admin:plan:view:{plan['id']}")])
     rows.append([InlineKeyboardButton("➕ Новый тариф", callback_data="admin:plan:new")])
     rows.append([InlineKeyboardButton("🔙 Админ-панель", callback_data="admin:menu")])
@@ -375,7 +381,7 @@ async def view_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan_id:
         f"📦 <b>{html.escape(plan['name'])}</b>\n\n"
         f"⏱️ Дни: {plan['duration_days']}\n"
         f"💵 Цена: {float(plan['price_usdt']):.2f} USDT\n"
-        f"📦 Трафик: {plan['traffic_gb']} ГБ\n"
+        f"📦 Трафик: {format_plan_traffic(plan)}\n"
         f"📱 Устройств: {plan['devices_limit']}\n"
         f"Статус: {'Активен' if plan['is_active'] else 'Отключён'}"
     )
@@ -385,6 +391,7 @@ async def view_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan_id:
         InlineKeyboardMarkup(
             [
                 [InlineKeyboardButton("✏️ Изменить цену", callback_data=f"admin:plan:price:{plan_id}")],
+                [InlineKeyboardButton("📦 Изменить трафик", callback_data=f"admin:plan:traffic:{plan_id}")],
                 [InlineKeyboardButton("✅ Активен / ❌ Отключён", callback_data=f"admin:plan:toggle:{plan_id}")],
                 [InlineKeyboardButton("🔙 К тарифам", callback_data="admin:plans")],
             ]
@@ -431,6 +438,41 @@ async def receive_plan_price(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return ConversationHandler.END
 
 
+async def ask_plan_traffic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await admin_guard(update, context):
+        return ConversationHandler.END
+    query = update.callback_query
+    plan_id = int((query.data or "").split(":")[3])
+    context.user_data["admin_plan_traffic_id"] = plan_id
+    await query.answer()
+    await safe_edit(
+        query,
+        "📦 Отправьте новый лимит трафика в ГБ.\n\n<code>0</code> или <code>безлимит</code> — безлимитный тариф.",
+        InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data="admin:plans")]]),
+    )
+    return WAIT_PLAN_TRAFFIC
+
+
+async def receive_plan_traffic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if not await admin_guard(update, context):
+        return ConversationHandler.END
+    text = (update.effective_message.text or "").strip().lower()
+    if text in {"0", "безлимит", "unlimited", "limitless"}:
+        traffic_gb = 0
+    elif text.isdigit():
+        traffic_gb = int(text)
+    else:
+        await update.effective_message.reply_text("⚠️ Нужен лимит в ГБ числом, либо 0/безлимит.")
+        return WAIT_PLAN_TRAFFIC
+
+    db = context.application.bot_data["db"]
+    plan_id = int(context.user_data["admin_plan_traffic_id"])
+    await db.set_plan_traffic(plan_id, traffic_gb)
+    label = "Безлимит" if traffic_gb <= 0 else f"{traffic_gb} ГБ"
+    await update.effective_message.reply_text(f"✅ Трафик тарифа обновлен: {label}")
+    return ConversationHandler.END
+
+
 async def start_new_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not await admin_guard(update, context):
         return ConversationHandler.END
@@ -463,16 +505,20 @@ async def new_plan_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except ValueError:
         await update.effective_message.reply_text("⚠️ Нужна цена числом.")
         return WAIT_NEW_PLAN_PRICE
-    await update.effective_message.reply_text("Укажите лимит трафика в ГБ.")
+    await update.effective_message.reply_text("Укажите лимит трафика в ГБ. 0 или безлимит — безлимитный тариф.")
     return WAIT_NEW_PLAN_TRAFFIC
 
 
 async def new_plan_traffic(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = (update.effective_message.text or "").strip()
-    if not text.isdigit():
-        await update.effective_message.reply_text("⚠️ Нужен целый лимит трафика.")
+    normalized = text.lower()
+    if normalized in {"0", "безлимит", "unlimited", "limitless"}:
+        context.user_data["new_plan_traffic"] = 0
+    elif text.isdigit():
+        context.user_data["new_plan_traffic"] = int(text)
+    else:
+        await update.effective_message.reply_text("⚠️ Нужен целый лимит трафика, либо 0/безлимит.")
         return WAIT_NEW_PLAN_TRAFFIC
-    context.user_data["new_plan_traffic"] = int(text)
     await update.effective_message.reply_text("Укажите лимит устройств.")
     return WAIT_NEW_PLAN_DEVICES
 
@@ -598,6 +644,13 @@ def get_handlers():
         ConversationHandler(
             entry_points=[CallbackQueryHandler(ask_plan_price, pattern=r"^admin:plan:price:\d+$")],
             states={WAIT_PLAN_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_plan_price)]},
+            fallbacks=[CallbackQueryHandler(cancel, pattern=r"^admin:plans$"), CommandHandler("start", cancel)],
+            per_chat=True,
+            per_user=True,
+        ),
+        ConversationHandler(
+            entry_points=[CallbackQueryHandler(ask_plan_traffic, pattern=r"^admin:plan:traffic:\d+$")],
+            states={WAIT_PLAN_TRAFFIC: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_plan_traffic)]},
             fallbacks=[CallbackQueryHandler(cancel, pattern=r"^admin:plans$"), CommandHandler("start", cancel)],
             per_chat=True,
             per_user=True,

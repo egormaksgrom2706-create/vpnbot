@@ -15,6 +15,16 @@ from handlers.start import build_subscription_url, format_datetime_moscow
 logger = logging.getLogger(__name__)
 
 
+def traffic_limit_bytes(plan) -> int:
+    traffic_gb = int(plan["traffic_gb"] or 0)
+    return 0 if traffic_gb <= 0 else traffic_gb * 1024**3
+
+
+def traffic_label(plan) -> str:
+    traffic_gb = int(plan["traffic_gb"] or 0)
+    return "Безлимит" if traffic_gb <= 0 else f"{traffic_gb} ГБ"
+
+
 async def create_crypto_invoice(application, payer_id: int, plan, beneficiary_id: int) -> tuple[int, str]:
     db = application.bot_data["db"]
     cryptobot = application.bot_data["cryptobot"]
@@ -127,7 +137,7 @@ async def activate_plan(
     try:
         response = await remna.provision_access(
             username=remna_username,
-            traffic_limit_bytes=int(plan["traffic_gb"]) * 1024**3,
+            traffic_limit_bytes=traffic_limit_bytes(plan),
             expire_at=expire_at,
             devices_limit=int(plan["devices_limit"]),
             telegram_id=beneficiary_id,
@@ -182,7 +192,7 @@ async def activate_plan(
             "✅ Подписка активирована!\n\n"
             f"Тариф: <b>{plan['name']}</b>\n"
             f"Ссылка: <code>{link}</code>\n"
-            f"Трафик: {plan['traffic_gb']} ГБ\n"
+            f"Трафик: {traffic_label(plan)}\n"
             f"Устройств: {plan['devices_limit']}\n"
             f"До: {format_datetime_moscow(expire_at.isoformat())}"
         ),

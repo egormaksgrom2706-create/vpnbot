@@ -75,69 +75,41 @@ def build_subscription_url(settings, sub_key: str | None) -> str:
     return RemnaWaveClient.build_subscription_url(settings.subscription_base_url, sub_key)
 
 
+def format_traffic_limit(value) -> str:
+    traffic_gb = float(value or 0)
+    if traffic_gb <= 0:
+        return "Безлимит"
+    return f"{traffic_gb:.0f} ГБ"
+
+
 def build_main_keyboard(settings, is_admin: bool) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] =[]
     
     rows.append([
-            InlineKeyboardButton(
-                text="Мои Подписки", 
-                callback_data="subs:list",
-                style="success",
-                icon_custom_emoji_id="6034923938486684992"
-            ),
-            InlineKeyboardButton(
-                text="Купить Подписку", 
-                callback_data="shop:plans",
-                style="success",
-                icon_custom_emoji_id="5891105528356018797"
-            ),
+            InlineKeyboardButton(text="Мои Подписки", callback_data="subs:list"),
+            InlineKeyboardButton(text="Купить Подписку", callback_data="shop:plans"),
         ]
     )
     
     rows.append([
-            InlineKeyboardButton(
-                text="Подарить", 
-                callback_data="shop:gift",
-                icon_custom_emoji_id="5773677501825945508"
-            )
+            InlineKeyboardButton(text="Подарить", callback_data="shop:gift")
         ]
     )
     
     rows.append([
-            InlineKeyboardButton(
-                text="Баланс", 
-                callback_data="main:balance",
-                icon_custom_emoji_id="5904462880941545555"
-            ),
-            InlineKeyboardButton(
-                text="Устройства", 
-                callback_data="main:devices",
-                icon_custom_emoji_id="6039605143601680423"
-            ),
+            InlineKeyboardButton(text="Баланс", callback_data="main:balance"),
+            InlineKeyboardButton(text="Устройства", callback_data="main:devices"),
         ]
     )
     
     rows.append([
-            InlineKeyboardButton(
-                text="Поделится подпиской", 
-                callback_data="main:share",
-                icon_custom_emoji_id="6033125983572201397"
-            ),
-            InlineKeyboardButton(
-                text="Партнёрская программа", 
-                callback_data="ref:menu",
-                icon_custom_emoji_id="5890848474563352982"
-            ),
+            InlineKeyboardButton(text="Поделится подпиской", callback_data="main:share"),
+            InlineKeyboardButton(text="Партнёрская программа", callback_data="ref:menu"),
         ]
     )
     
     rows.append([
-            InlineKeyboardButton(
-                text="Поддержка", 
-                url=settings.support_link,
-                style="danger",
-                icon_custom_emoji_id="6028346797368283073"
-            )
+            InlineKeyboardButton(text="Поддержка", url=settings.support_link)
         ]
     )
     
@@ -176,7 +148,7 @@ def profile_text(user, subscription, settings) -> str:
         plan_block = (
             "<blockquote>"
             f"💠 Тариф: {html.escape(subscription['plan_name'])}\n"
-            f"📦 Трафик: {subscription['traffic_used_gb'] or 0:.1f}/{subscription['traffic_limit_gb']:.0f} ГБ\n"
+            f"📦 Трафик: {subscription['traffic_used_gb'] or 0:.1f} / {format_traffic_limit(subscription['traffic_limit_gb'])}\n"
             f"📱 Лимит устройств: {subscription['devices_limit']}"
             "</blockquote>"
         )
@@ -218,7 +190,7 @@ def subscription_text(subscription, settings, live_data: dict | None = None) -> 
         "<b>📦 Тариф подписки</b>\n"
         "<blockquote>"
         f"Тариф: {html.escape(subscription['plan_name'])}\n"
-        f"Трафик: {used_gb:.2f} / {float(subscription['traffic_limit_gb']):.0f} ГБ\n"
+        f"Трафик: {used_gb:.2f} / {format_traffic_limit(subscription['traffic_limit_gb'])}\n"
         f"Подключено устройств: {len(devices)}\n"
         f"Лимит устройств: {subscription['devices_limit']}"
         "</blockquote>\n\n"
@@ -252,6 +224,17 @@ async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE, edit:
         return
 
     subscription = await db.get_latest_active_subscription(tg_user.id)
+    if subscription:
+        remna = context.application.bot_data["remna"]
+        try:
+            live_data = await remna.get_subscription(subscription["remna_sub_id"])
+            await db.update_subscription_usage(
+                int(subscription["id"]),
+                round(float(live_data.get("traffic_used_bytes", 0)) / (1024**3), 2),
+            )
+            subscription = await db.get_latest_active_subscription(tg_user.id)
+        except Exception:
+            logger.exception("Не удалось обновить статистику в профиле %s", subscription["id"])
     keyboard = build_main_keyboard(settings, tg_user.id in settings.admin_ids)
     text = profile_text(user, subscription, settings)
     if edit and update.callback_query:
@@ -283,7 +266,24 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                     referrer_id = int(ref_user["id"])
 
     full_name = tg_user.full_name or tg_user.first_name or "Пользователь"
-    await db.upsert_user(tg_user.id, tg_user.username, full_name, referrer_id=referrer_id)
+    user, _ = await db.upsert_user(tg_user.id, tg_user.username, full_name, referrer_id=referrer_id)
+    if not int(user["trial_used"] or 0):
+        trial_plan = await db.get_trial_plan()
+        if trial_plan:
+            try:
+                from handlers.payments import activate_plan
+
+                subscription_id = await activate_plan(
+                    context.application,
+                    beneficiary_id=tg_user.id,
+                    plan=trial_plan,
+                    payer_id=tg_user.id,
+                    source="trial",
+                )
+                if subscription_id:
+                    await db.mark_trial_used(tg_user.id)
+            except Exception:
+                logger.exception("Не удалось выдать пробную подписку пользователю %s", tg_user.id)
     await show_profile(update, context)
 
 
@@ -380,9 +380,10 @@ async def show_devices(update: Update, context: ContextTypes.DEFAULT_TYPE, subsc
             lines.append(f"{index}. {html.escape(device.get('name') or 'Без имени')} • <code>{device.get('id')}</code> • {html.escape(str(last_seen))}")
         text = "\n".join(lines)
 
+    context.user_data[f"devices:{subscription['id']}"] = [str(device.get("id") or "") for device in devices]
     buttons = [
-        [InlineKeyboardButton(f"❌ Отключить {device.get('name') or device.get('id')}", callback_data=f"subs:kick:{subscription['id']}:{device['id']}")]
-        for device in devices
+        [InlineKeyboardButton(f"❌ Отключить {device.get('name') or device.get('id')}", callback_data=f"subs:kick:{subscription['id']}:{index}")]
+        for index, device in enumerate(devices)
     ]
     buttons.append([InlineKeyboardButton("🔙 К подписке", callback_data=f"subs:open:{subscription['id']}")])
     await safe_edit(query, text, InlineKeyboardMarkup(buttons))
@@ -482,6 +483,9 @@ async def disconnect_device(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         await safe_edit(query, "⚠️ Подписка не найдена.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="subs:list")]]))
         return
     try:
+        stored_devices = context.user_data.get(f"devices:{subscription_id}") or []
+        if device_id.isdigit() and int(device_id) < len(stored_devices):
+            device_id = stored_devices[int(device_id)]
         await remna.disconnect_device(subscription["remna_sub_id"], device_id)
     except Exception:
         logger.exception("Не удалось отключить устройство %s", device_id)

@@ -51,7 +51,8 @@ class Database:
                     created_at TEXT,
                     partner_code TEXT,
                     withdraw_method TEXT,
-                    withdraw_details TEXT
+                    withdraw_details TEXT,
+                    trial_used INTEGER DEFAULT 0
                 );
 
                 CREATE TABLE IF NOT EXISTS plans (
@@ -115,6 +116,7 @@ class Database:
             await self._ensure_column(db, "users", "partner_code", "TEXT")
             await self._ensure_column(db, "users", "withdraw_method", "TEXT")
             await self._ensure_column(db, "users", "withdraw_details", "TEXT")
+            await self._ensure_column(db, "users", "trial_used", "INTEGER DEFAULT 0")
             await self._seed_plans(db)
             await db.commit()
 
@@ -173,8 +175,8 @@ class Database:
             created_at = utcnow().isoformat()
             await db.execute(
                 """
-                INSERT INTO users (id, username, full_name, balance_rub, referrer_id, is_banned, created_at, partner_code)
-                VALUES (?, ?, ?, 0, ?, 0, ?, ?)
+                INSERT INTO users (id, username, full_name, balance_rub, referrer_id, is_banned, created_at, partner_code, trial_used)
+                VALUES (?, ?, ?, 0, ?, 0, ?, ?, 0)
                 """,
                 (user_id, username, full_name, referrer_id, created_at, partner_code),
             )
@@ -232,6 +234,11 @@ class Database:
             )
             await db.commit()
 
+    async def mark_trial_used(self, user_id: int) -> None:
+        async with self.connect() as db:
+            await db.execute("UPDATE users SET trial_used = 1 WHERE id = ?", (user_id,))
+            await db.commit()
+
     async def list_plans(self, only_active: bool = False) -> list[aiosqlite.Row]:
         query = "SELECT * FROM plans"
         params: tuple[Any, ...] = ()
@@ -249,6 +256,24 @@ class Database:
         async with self.connect() as db:
             await db.execute("UPDATE plans SET price_usdt = ? WHERE id = ?", (price_usdt, plan_id))
             await db.commit()
+
+    async def set_plan_traffic(self, plan_id: int, traffic_gb: int) -> None:
+        async with self.connect() as db:
+            await db.execute("UPDATE plans SET traffic_gb = ? WHERE id = ?", (traffic_gb, plan_id))
+            await db.commit()
+
+    async def get_trial_plan(self) -> aiosqlite.Row | None:
+        async with self.connect() as db:
+            return await self._fetchone(
+                db,
+                """
+                SELECT *
+                FROM plans
+                WHERE is_active = 1 AND duration_days = 3 AND price_usdt = 0
+                ORDER BY id ASC
+                LIMIT 1
+                """,
+            )
 
     async def toggle_plan(self, plan_id: int) -> None:
         async with self.connect() as db:

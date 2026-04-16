@@ -125,6 +125,26 @@ class RemnaWaveClient:
         raise RuntimeError("Unexpected RemnaWave create-subscription response")
 
     async def get_subscription(self, sub_id: str) -> dict:
+        devices = await self.get_user_devices(sub_id)
+        try:
+            response = await self._request("GET", f"/api/subscriptions/by-uuid/{sub_id}")
+            response.raise_for_status()
+            data = self._unwrap_response(response)
+            if isinstance(data, dict):
+                user = data.get("user") or data
+                return {
+                    "traffic_used_bytes": int(
+                        user.get("trafficUsedBytes")
+                        or user.get("usedTrafficBytes")
+                        or data.get("trafficUsedBytes")
+                        or data.get("traffic_used_bytes")
+                        or 0
+                    ),
+                    "devices": devices,
+                }
+        except Exception:
+            logger.warning("RemnaWave get subscription by uuid failed for %s, trying user APIs", sub_id)
+
         try:
             response = await self._request("GET", f"/api/users/{sub_id}")
             response.raise_for_status()
@@ -132,14 +152,8 @@ class RemnaWaveClient:
             if isinstance(data, dict):
                 traffic = data.get("userTraffic") or {}
                 return {
-                    "traffic_used_bytes": int(
-                        traffic.get("usedTrafficBytes")
-                        or data.get("usedTrafficBytes")
-                        or data.get("trafficUsedBytes")
-                        or data.get("traffic_used_bytes")
-                        or 0
-                    ),
-                    "devices": data.get("hwidDevices") or data.get("activeDevices") or data.get("devices") or [],
+                    "traffic_used_bytes": int(traffic.get("usedTrafficBytes") or data.get("usedTrafficBytes") or 0),
+                    "devices": devices,
                 }
         except Exception:
             logger.warning("RemnaWave get user by uuid failed for %s, trying short uuid and legacy APIs", sub_id)
@@ -152,7 +166,7 @@ class RemnaWaveClient:
                 traffic = data.get("userTraffic") or {}
                 return {
                     "traffic_used_bytes": int(traffic.get("usedTrafficBytes") or data.get("usedTrafficBytes") or 0),
-                    "devices": data.get("hwidDevices") or data.get("activeDevices") or data.get("devices") or [],
+                    "devices": devices or data.get("hwidDevices") or data.get("activeDevices") or data.get("devices") or [],
                 }
         except Exception:
             logger.warning("RemnaWave get user by short uuid failed for %s, trying legacy subscription API", sub_id)
@@ -165,8 +179,21 @@ class RemnaWaveClient:
         raise RuntimeError("Unexpected RemnaWave get-subscription response")
 
     async def disconnect_device(self, sub_id: str, device_id: str) -> None:
-        response = await self._request("DELETE", f"/api/subscriptions/{sub_id}/devices/{device_id}")
+        response = await self._request("POST", "/api/hwid/devices/delete", json={"userUuid": sub_id, "hwid": device_id})
         response.raise_for_status()
+
+    async def get_user_devices(self, user_uuid: str) -> list[dict]:
+        try:
+            response = await self._request("GET", f"/api/hwid/devices/{user_uuid}")
+            response.raise_for_status()
+            data = self._unwrap_response(response)
+            if not isinstance(data, dict):
+                return []
+            devices = data.get("devices") or []
+            return [self._normalize_device(device) for device in devices if isinstance(device, dict)]
+        except Exception:
+            logger.warning("RemnaWave HWID devices request failed for %s", user_uuid)
+            return []
 
     async def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
         urls = [self.base_url, *self.fallback_urls]
@@ -248,6 +275,23 @@ class RemnaWaveClient:
                 or self._extract_subscription_key(subscription_url)
             ),
             "subscription_url": subscription_url,
+        }
+
+    @staticmethod
+    def _normalize_device(device: dict) -> dict:
+        device_id = str(device.get("hwid") or device.get("id") or "")
+        name = (
+            device.get("deviceModel")
+            or device.get("platform")
+            or device.get("osVersion")
+            or device.get("userAgent")
+            or device_id[:12]
+            or "Device"
+        )
+        return {
+            "id": device_id,
+            "name": str(name),
+            "last_seen": device.get("updatedAt") or device.get("createdAt") or "неизвестно",
         }
 
     @staticmethod

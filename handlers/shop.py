@@ -20,12 +20,17 @@ from handlers.start import safe_edit
 WAIT_GIFT_RECIPIENT = 1
 
 
+def traffic_label(plan) -> str:
+    traffic_gb = int(plan["traffic_gb"] or 0)
+    return "Безлимит" if traffic_gb <= 0 else f"{traffic_gb} ГБ"
+
+
 def plan_card(plan) -> str:
     return (
         f"💎 <b>{html.escape(plan['name'])}</b>\n\n"
         "<blockquote>"
         f"⏱️ Длительность: {plan['duration_days']} д.\n"
-        f"📦 Трафик: {plan['traffic_gb']} ГБ\n"
+        f"📦 Трафик: {traffic_label(plan)}\n"
         f"📱 Устройств: {plan['devices_limit']}\n"
         f"💵 Цена: {float(plan['price_usdt']):.2f} USDT"
         "</blockquote>\n\n"
@@ -152,7 +157,7 @@ async def start_stars_buy(update: Update, context: ContextTypes.DEFAULT_TYPE, pl
     await context.bot.send_invoice(
         chat_id=query.from_user.id,
         title=f"VPN тариф: {plan['name']}",
-        description=f"{plan['duration_days']} дн. • {plan['traffic_gb']} ГБ • {plan['devices_limit']} устройств",
+        description=f"{plan['duration_days']} дн. • {traffic_label(plan)} • {plan['devices_limit']} устройств",
         payload=f"stars:{payment_id}",
         provider_token="",
         currency="XTR",
