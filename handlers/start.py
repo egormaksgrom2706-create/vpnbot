@@ -82,46 +82,105 @@ def format_traffic_limit(value) -> str:
     return f"{traffic_gb:.0f} ГБ"
 
 
+def styled_button(
+    text: str,
+    *,
+    callback_data: str | None = None,
+    url: str | None = None,
+    style: str | None = None,
+    icon_custom_emoji_id: str | None = None,
+) -> InlineKeyboardButton:
+    api_kwargs = {}
+    if style:
+        api_kwargs["style"] = style
+    if icon_custom_emoji_id:
+        api_kwargs["icon_custom_emoji_id"] = icon_custom_emoji_id
+    return InlineKeyboardButton(
+        text=text,
+        callback_data=callback_data,
+        url=url,
+        api_kwargs=api_kwargs or None,
+    )
+
+
 def build_main_keyboard(settings, is_admin: bool) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] =[]
-    
-    rows.append([
-            InlineKeyboardButton(text="Мои Подписки", callback_data="subs:list"),
-            InlineKeyboardButton(text="Купить Подписку", callback_data="shop:plans"),
+    rows: list[list[InlineKeyboardButton]] = []
+
+    rows.append(
+        [
+            styled_button(
+                text="Мои Подписки",
+                callback_data="subs:list",
+                style="success",
+                icon_custom_emoji_id="6034923938486684992",
+            ),
+            styled_button(
+                text="Купить Подписку",
+                callback_data="shop:plans",
+                style="success",
+                icon_custom_emoji_id="5891105528356018797",
+            ),
         ]
     )
-    
-    rows.append([
-            InlineKeyboardButton(text="Подарить", callback_data="shop:gift")
+
+    rows.append(
+        [
+            styled_button(
+                text="Подарить",
+                callback_data="shop:gift",
+                icon_custom_emoji_id="5773677501825945508",
+            )
         ]
     )
-    
-    rows.append([
-            InlineKeyboardButton(text="Баланс", callback_data="main:balance"),
-            InlineKeyboardButton(text="Устройства", callback_data="main:devices"),
+
+    rows.append(
+        [
+            styled_button(
+                text="Баланс",
+                callback_data="main:balance",
+                icon_custom_emoji_id="5904462880941545555",
+            ),
+            styled_button(
+                text="Устройства",
+                callback_data="main:devices",
+                icon_custom_emoji_id="6039605143601680423",
+            ),
         ]
     )
-    
-    rows.append([
-            InlineKeyboardButton(text="Поделится подпиской", callback_data="main:share"),
-            InlineKeyboardButton(text="Партнёрская программа", callback_data="ref:menu"),
+
+    rows.append(
+        [
+            styled_button(
+                text="Поделится подпиской",
+                callback_data="main:share",
+                icon_custom_emoji_id="6033125983572201397",
+            ),
+            styled_button(
+                text="Партнёрская программа",
+                callback_data="ref:menu",
+                icon_custom_emoji_id="5890848474563352982",
+            ),
         ]
     )
-    
-    rows.append([
-            InlineKeyboardButton(text="Поддержка", url=settings.support_link)
+
+    rows.append(
+        [
+            styled_button(
+                text="Поддержка",
+                url=settings.support_link,
+                style="danger",
+                icon_custom_emoji_id="6028346797368283073",
+            )
         ]
     )
-    
+
     if is_admin:
-        rows.append([
-                InlineKeyboardButton(
-                    text="Админ-панель", 
-                    callback_data="admin:menu"
-                )
+        rows.append(
+            [
+                InlineKeyboardButton(text="🔐 Админ-панель", callback_data="admin:menu")
             ]
         )
-        
+
     return InlineKeyboardMarkup(rows)
 
 
@@ -158,7 +217,7 @@ def profile_text(user, subscription, settings) -> str:
         expires_at = "не указан"
 
     return (
-        "🚀<b>Личный кабинет</b>\n\n"
+        "🦊 <b>Личный кабинет</b>\n\n"
         "<b>👤 Профиль:</b>\n"
         "<blockquote>"
         f"Имя: {html.escape(user['full_name'] or 'Без имени')}\n"
