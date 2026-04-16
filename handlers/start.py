@@ -82,6 +82,25 @@ def format_traffic_limit(value) -> str:
     return f"{traffic_gb:.0f} ГБ"
 
 
+def format_devices_limit(value) -> str:
+    devices_limit = int(value or 0)
+    if devices_limit <= 0:
+        return "Безлимит"
+    return str(devices_limit)
+
+
+def format_expiration(value: str | None, duration_days: int | None = None) -> str:
+    if duration_days is not None and int(duration_days or 0) >= 36500:
+        return "Навсегда"
+    return format_datetime_moscow(value)
+
+
+def format_remaining_for_plan(value: str | None, duration_days: int | None = None) -> str:
+    if duration_days is not None and int(duration_days or 0) >= 36500:
+        return "Навсегда"
+    return format_remaining(value)
+
+
 def styled_button(
     text: str,
     *,
@@ -208,16 +227,16 @@ def profile_text(user, subscription, settings) -> str:
             "<blockquote>"
             f"💠 Тариф: {html.escape(subscription['plan_name'])}\n"
             f"📦 Трафик: {subscription['traffic_used_gb'] or 0:.1f} / {format_traffic_limit(subscription['traffic_limit_gb'])}\n"
-            f"📱 Лимит устройств: {subscription['devices_limit']}"
+            f"📱 Лимит устройств: {format_devices_limit(subscription['devices_limit'])}"
             "</blockquote>"
         )
-        expires_at = format_datetime_moscow(subscription["expires_at"])
+        expires_at = format_expiration(subscription["expires_at"], subscription["duration_days"])
     else:
         plan_block = "<blockquote>💠 Тариф: не активирован\n📦 Трафик: 0 / 0 ГБ\n📱 Лимит устройств: 0</blockquote>"
         expires_at = "не указан"
 
     return (
-        "🦊 <b>Личный кабинет</b>\n\n"
+        "🚀 <b>Личный кабинет</b>\n\n"
         "<b>👤 Профиль:</b>\n"
         "<blockquote>"
         f"Имя: {html.escape(user['full_name'] or 'Без имени')}\n"
@@ -243,15 +262,15 @@ def subscription_text(subscription, settings, live_data: dict | None = None) -> 
         "🌐 <b>Ваша подписка</b>\n"
         f"{html.escape(build_subscription_url(settings, subscription['sub_key']))}\n\n"
         "<blockquote>"
-        f"{format_remaining(subscription['expires_at'])}\n"
-        f"Истекает: {format_datetime_moscow(subscription['expires_at'])}"
+        f"{format_remaining_for_plan(subscription['expires_at'], subscription['duration_days'])}\n"
+        f"Истекает: {format_expiration(subscription['expires_at'], subscription['duration_days'])}"
         "</blockquote>\n\n"
         "<b>📦 Тариф подписки</b>\n"
         "<blockquote>"
         f"Тариф: {html.escape(subscription['plan_name'])}\n"
         f"Трафик: {used_gb:.2f} / {format_traffic_limit(subscription['traffic_limit_gb'])}\n"
         f"Подключено устройств: {len(devices)}\n"
-        f"Лимит устройств: {subscription['devices_limit']}"
+        f"Лимит устройств: {format_devices_limit(subscription['devices_limit'])}"
         "</blockquote>\n\n"
         "Подключите свое устройство по кнопкам ниже."
     )
@@ -395,6 +414,7 @@ async def open_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             subscription_id,
             round(float(live_data.get("traffic_used_bytes", 0)) / (1024**3), 2),
         )
+        subscription = await db.get_subscription(subscription_id)
     except Exception:
         logger.exception("Не удалось обновить статистику подписки %s", subscription_id)
 
@@ -537,6 +557,7 @@ async def disconnect_device(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     await query.answer("Отключаю устройство...")
     db = context.application.bot_data["db"]
     remna = context.application.bot_data["remna"]
+    settings = context.application.bot_data["settings"]
     subscription = await db.get_subscription(subscription_id)
     if not subscription or int(subscription["user_id"]) != query.from_user.id:
         await safe_edit(query, "⚠️ Подписка не найдена.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="subs:list")]]))
@@ -546,15 +567,34 @@ async def disconnect_device(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         if device_id.isdigit() and int(device_id) < len(stored_devices):
             device_id = stored_devices[int(device_id)]
         await remna.disconnect_device(subscription["remna_sub_id"], device_id)
+        revoked = await remna.revoke_subscription(subscription["remna_sub_id"])
+        new_sub_key = revoked.get("sub_key") or subscription["sub_key"]
+        if new_sub_key and new_sub_key != subscription["sub_key"]:
+            await db.update_subscription_key(subscription_id, new_sub_key)
     except Exception:
         logger.exception("Не удалось отключить устройство %s", device_id)
         await safe_edit(
             query,
-            "⚠️ Не удалось отключить устройство. Попробуйте позже.",
+            "⚠️ Не удалось отключить устройство и обновить ссылку. Попробуйте позже.",
             InlineKeyboardMarkup([[InlineKeyboardButton("🔙 К устройствам", callback_data=f"subs:devices:{subscription_id}")]]),
         )
         return
-    await show_devices(update, context, subscription_id)
+
+    link = build_subscription_url(settings, new_sub_key)
+    await safe_edit(
+        query,
+        (
+            "✅ Устройство отвязано.\n\n"
+            "Ссылка подписки обновлена, старая ссылка больше не должна давать доступ.\n"
+            f"Новая ссылка:\n<code>{html.escape(link)}</code>"
+        ),
+        InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("📱 Устройства", callback_data=f"subs:devices:{subscription_id}")],
+                [InlineKeyboardButton("🔙 К подписке", callback_data=f"subs:open:{subscription_id}")],
+            ]
+        ),
+    )
 
 
 async def show_balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

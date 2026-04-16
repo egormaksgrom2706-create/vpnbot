@@ -70,6 +70,16 @@ def format_plan_traffic(plan) -> str:
     return "Безлимит" if traffic_gb <= 0 else f"{traffic_gb} ГБ"
 
 
+def format_plan_devices(plan) -> str:
+    devices_limit = int(plan["devices_limit"] or 0)
+    return "Безлимит" if devices_limit <= 0 else str(devices_limit)
+
+
+def format_plan_duration(plan) -> str:
+    duration_days = int(plan["duration_days"] or 0)
+    return "Навсегда" if duration_days >= 36500 else f"{duration_days} д."
+
+
 async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await admin_guard(update, context):
         return
@@ -360,7 +370,11 @@ async def show_plans(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     rows: list[list[InlineKeyboardButton]] = []
     for plan in plans:
         status = "✅ Активен" if plan["is_active"] else "❌ Отключён"
-        lines.append(f"• {html.escape(plan['name'])} — {float(plan['price_usdt']):.2f} USDT — {format_plan_traffic(plan)} — {status}")
+        lines.append(
+            f"• {html.escape(plan['name'])} — {format_plan_duration(plan)} — "
+            f"{float(plan['price_usdt']):.2f} USDT — {format_plan_traffic(plan)} — "
+            f"{format_plan_devices(plan)} устр. — {status}"
+        )
         rows.append([InlineKeyboardButton(f"✏️ {plan['name']}", callback_data=f"admin:plan:view:{plan['id']}")])
     rows.append([InlineKeyboardButton("➕ Новый тариф", callback_data="admin:plan:new")])
     rows.append([InlineKeyboardButton("🔙 Админ-панель", callback_data="admin:menu")])
@@ -379,10 +393,10 @@ async def view_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan_id:
         return
     text = (
         f"📦 <b>{html.escape(plan['name'])}</b>\n\n"
-        f"⏱️ Дни: {plan['duration_days']}\n"
+        f"⏱️ Срок: {format_plan_duration(plan)}\n"
         f"💵 Цена: {float(plan['price_usdt']):.2f} USDT\n"
         f"📦 Трафик: {format_plan_traffic(plan)}\n"
-        f"📱 Устройств: {plan['devices_limit']}\n"
+        f"📱 Устройств: {format_plan_devices(plan)}\n"
         f"Статус: {'Активен' if plan['is_active'] else 'Отключён'}"
     )
     await safe_edit(

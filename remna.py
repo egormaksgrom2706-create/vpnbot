@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
@@ -76,8 +77,9 @@ class RemnaWaveClient:
             "trafficLimitBytes": int(traffic_limit_bytes),
             "trafficLimitStrategy": "NO_RESET",
             "expireAt": self._format_datetime(expire_at),
-            "hwidDeviceLimit": int(devices_limit),
         }
+        if int(devices_limit) > 0:
+            modern_payload["hwidDeviceLimit"] = int(devices_limit)
         if telegram_id is not None:
             modern_payload["telegramId"] = int(telegram_id)
         if description:
@@ -133,13 +135,7 @@ class RemnaWaveClient:
             if isinstance(data, dict):
                 user = data.get("user") or data
                 return {
-                    "traffic_used_bytes": int(
-                        user.get("trafficUsedBytes")
-                        or user.get("usedTrafficBytes")
-                        or data.get("trafficUsedBytes")
-                        or data.get("traffic_used_bytes")
-                        or 0
-                    ),
+                    "traffic_used_bytes": self._extract_traffic_used_bytes(data),
                     "devices": devices,
                 }
         except Exception:
@@ -150,9 +146,8 @@ class RemnaWaveClient:
             response.raise_for_status()
             data = self._unwrap_response(response)
             if isinstance(data, dict):
-                traffic = data.get("userTraffic") or {}
                 return {
-                    "traffic_used_bytes": int(traffic.get("usedTrafficBytes") or data.get("usedTrafficBytes") or 0),
+                    "traffic_used_bytes": self._extract_traffic_used_bytes(data),
                     "devices": devices,
                 }
         except Exception:
@@ -163,9 +158,8 @@ class RemnaWaveClient:
             response.raise_for_status()
             data = self._unwrap_response(response)
             if isinstance(data, dict):
-                traffic = data.get("userTraffic") or {}
                 return {
-                    "traffic_used_bytes": int(traffic.get("usedTrafficBytes") or data.get("usedTrafficBytes") or 0),
+                    "traffic_used_bytes": self._extract_traffic_used_bytes(data),
                     "devices": devices or data.get("hwidDevices") or data.get("activeDevices") or data.get("devices") or [],
                 }
         except Exception:
@@ -181,6 +175,18 @@ class RemnaWaveClient:
     async def disconnect_device(self, sub_id: str, device_id: str) -> None:
         response = await self._request("POST", "/api/hwid/devices/delete", json={"userUuid": sub_id, "hwid": device_id})
         response.raise_for_status()
+
+    async def revoke_subscription(self, user_uuid: str) -> dict[str, str]:
+        response = await self._request(
+            "POST",
+            f"/api/users/{user_uuid}/actions/revoke",
+            json={"revokeOnlyPasswords": False},
+        )
+        response.raise_for_status()
+        data = self._unwrap_response(response)
+        if isinstance(data, dict):
+            return self._normalize_user_response(data)
+        raise RuntimeError("Unexpected RemnaWave revoke-subscription response")
 
     async def get_user_devices(self, user_uuid: str) -> list[dict]:
         try:
@@ -293,6 +299,64 @@ class RemnaWaveClient:
             "name": str(name),
             "last_seen": device.get("updatedAt") or device.get("createdAt") or "неизвестно",
         }
+
+    @classmethod
+    def _extract_traffic_used_bytes(cls, data: dict) -> int:
+        values: list[int] = []
+        used_keys = {
+            "trafficUsedBytes",
+            "usedTrafficBytes",
+            "lifetimeTrafficUsedBytes",
+            "lifetimeUsedTrafficBytes",
+            "traffic_used_bytes",
+            "trafficUsed",
+            "usedTraffic",
+            "lifetimeTrafficUsed",
+        }
+
+        def walk(value):
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    if key in used_keys:
+                        values.append(cls._traffic_value_to_bytes(item))
+                    if isinstance(item, (dict, list)):
+                        walk(item)
+            elif isinstance(value, list):
+                for item in value:
+                    walk(item)
+
+        walk(data)
+        return max(values or [0])
+
+    @staticmethod
+    def _traffic_value_to_bytes(value) -> int:
+        if value is None:
+            return 0
+        if isinstance(value, (int, float)):
+            return int(value)
+        text = str(value).strip().replace(",", ".")
+        if not text:
+            return 0
+        if text.isdigit():
+            return int(text)
+
+        match = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*([KMGT]?I?B|[KMGT]?B)?", text, re.IGNORECASE)
+        if not match:
+            return 0
+        amount = float(match.group(1))
+        unit = (match.group(2) or "B").upper()
+        multipliers = {
+            "B": 1,
+            "KB": 1000,
+            "MB": 1000**2,
+            "GB": 1000**3,
+            "TB": 1000**4,
+            "KIB": 1024,
+            "MIB": 1024**2,
+            "GIB": 1024**3,
+            "TIB": 1024**4,
+        }
+        return int(amount * multipliers.get(unit, 1))
 
     @staticmethod
     def build_subscription_url(base_url: str, sub_key: str) -> str:

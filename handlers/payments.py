@@ -25,6 +25,25 @@ def traffic_label(plan) -> str:
     return "Безлимит" if traffic_gb <= 0 else f"{traffic_gb} ГБ"
 
 
+def devices_label(plan) -> str:
+    devices_limit = int(plan["devices_limit"] or 0)
+    return "Безлимит" if devices_limit <= 0 else str(devices_limit)
+
+
+def plan_expire_at(plan):
+    duration_days = int(plan["duration_days"] or 0)
+    if duration_days <= 0 or duration_days >= 36500:
+        return utcnow() + timedelta(days=36500)
+    return utcnow() + timedelta(days=duration_days)
+
+
+def plan_expire_label(plan, expire_at) -> str:
+    duration_days = int(plan["duration_days"] or 0)
+    if duration_days <= 0 or duration_days >= 36500:
+        return "Навсегда"
+    return format_datetime_moscow(expire_at.isoformat())
+
+
 async def create_crypto_invoice(application, payer_id: int, plan, beneficiary_id: int) -> tuple[int, str]:
     db = application.bot_data["db"]
     cryptobot = application.bot_data["cryptobot"]
@@ -132,7 +151,7 @@ async def activate_plan(
     if not beneficiary:
         return None
 
-    expire_at = utcnow() + timedelta(days=int(plan["duration_days"]))
+    expire_at = plan_expire_at(plan)
     remna_username = f"tg_{beneficiary_id}_{int(utcnow().timestamp())}"
     try:
         response = await remna.provision_access(
@@ -193,8 +212,8 @@ async def activate_plan(
             f"Тариф: <b>{plan['name']}</b>\n"
             f"Ссылка: <code>{link}</code>\n"
             f"Трафик: {traffic_label(plan)}\n"
-            f"Устройств: {plan['devices_limit']}\n"
-            f"До: {format_datetime_moscow(expire_at.isoformat())}"
+            f"Устройств: {devices_label(plan)}\n"
+            f"До: {plan_expire_label(plan, expire_at)}"
         ),
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🌐 Мои подписки", callback_data=f"subs:open:{subscription_id}")]]),

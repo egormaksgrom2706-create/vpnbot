@@ -11,11 +11,12 @@ import aiosqlite
 
 
 DEFAULT_PLANS = [
-    ("Пробный (3 дня)", 3, 0.0, 10, 2),
-    ("День", 1, 0.5, 5, 2),
-    ("Неделя", 7, 1.5, 30, 3),
-    ("Месяц", 30, 4.0, 100, 3),
-    ("Год", 365, 35.0, 1000, 5),
+    ("Пробный (3 дня)", 3, 0.0, 10, 2, 1),
+    ("День", 1, 0.5, 5, 2, 1),
+    ("Неделя", 7, 1.5, 30, 3, 1),
+    ("Месяц", 30, 4.0, 100, 3, 1),
+    ("Год", 365, 35.0, 1000, 5, 1),
+    ("Админ навсегда", 36500, 0.0, 0, 0, 0),
 ]
 
 
@@ -139,14 +140,14 @@ class Database:
         await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     async def _seed_plans(self, db: aiosqlite.Connection) -> None:
-        for name, duration, price, traffic, devices in DEFAULT_PLANS:
+        for name, duration, price, traffic, devices, is_active in DEFAULT_PLANS:
             await db.execute(
                 """
                 INSERT INTO plans (name, duration_days, price_usdt, traffic_gb, devices_limit, is_active)
-                VALUES (?, ?, ?, ?, ?, 1)
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(name) DO NOTHING
                 """,
-                (name, duration, price, traffic, devices),
+                (name, duration, price, traffic, devices, is_active),
             )
 
     async def upsert_user(
@@ -412,6 +413,14 @@ class Database:
             await db.execute(
                 "UPDATE subscriptions SET traffic_used_gb = ? WHERE id = ?",
                 (traffic_used_gb, subscription_id),
+            )
+            await db.commit()
+
+    async def update_subscription_key(self, subscription_id: int, sub_key: str) -> None:
+        async with self.connect() as db:
+            await db.execute(
+                "UPDATE subscriptions SET sub_key = ? WHERE id = ?",
+                (sub_key, subscription_id),
             )
             await db.commit()
 

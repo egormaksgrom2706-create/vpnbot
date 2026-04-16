@@ -25,13 +25,22 @@ def traffic_label(plan) -> str:
     return "Безлимит" if traffic_gb <= 0 else f"{traffic_gb} ГБ"
 
 
+def devices_label(plan) -> str:
+    devices_limit = int(plan["devices_limit"] or 0)
+    return "Безлимит" if devices_limit <= 0 else str(devices_limit)
+
+
+def is_admin_only_plan(plan) -> bool:
+    return str(plan["name"]).lower().startswith("админ")
+
+
 def plan_card(plan) -> str:
     return (
         f"💎 <b>{html.escape(plan['name'])}</b>\n\n"
         "<blockquote>"
         f"⏱️ Длительность: {plan['duration_days']} д.\n"
         f"📦 Трафик: {traffic_label(plan)}\n"
-        f"📱 Устройств: {plan['devices_limit']}\n"
+        f"📱 Устройств: {devices_label(plan)}\n"
         f"💵 Цена: {float(plan['price_usdt']):.2f} USDT"
         "</blockquote>\n\n"
         "Выберите удобный способ оплаты."
@@ -44,7 +53,7 @@ async def show_plans(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     await query.answer()
     db = context.application.bot_data["db"]
-    plans = await db.list_plans(only_active=True)
+    plans = [plan for plan in await db.list_plans(only_active=True) if not is_admin_only_plan(plan)]
     buttons = [[InlineKeyboardButton(f"💎 {plan['name']} • {float(plan['price_usdt']):.2f} USDT", callback_data=f"shop:plan:{plan['id']}")] for plan in plans]
     buttons.append([InlineKeyboardButton("🔙 Личный кабинет", callback_data="profile")])
     await safe_edit(
@@ -61,7 +70,7 @@ async def show_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan_id:
     await query.answer()
     db = context.application.bot_data["db"]
     plan = await db.get_plan(plan_id)
-    if not plan or not plan["is_active"]:
+    if not plan or not plan["is_active"] or is_admin_only_plan(plan):
         await safe_edit(query, "⚠️ Тариф недоступен.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 К тарифам", callback_data="shop:plans")]]))
         return
     await safe_edit(
@@ -85,7 +94,7 @@ async def start_crypto_buy(update: Update, context: ContextTypes.DEFAULT_TYPE, p
     await query.answer("Создаю счет...")
     db = context.application.bot_data["db"]
     plan = await db.get_plan(plan_id)
-    if not plan:
+    if not plan or is_admin_only_plan(plan):
         await safe_edit(query, "⚠️ Тариф не найден.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="shop:plans")]]))
         return
 
@@ -137,7 +146,7 @@ async def start_stars_buy(update: Update, context: ContextTypes.DEFAULT_TYPE, pl
     db = context.application.bot_data["db"]
     settings = context.application.bot_data["settings"]
     plan = await db.get_plan(plan_id)
-    if not plan:
+    if not plan or is_admin_only_plan(plan):
         await safe_edit(query, "⚠️ Тариф не найден.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="shop:plans")]]))
         return
 
@@ -157,7 +166,7 @@ async def start_stars_buy(update: Update, context: ContextTypes.DEFAULT_TYPE, pl
     await context.bot.send_invoice(
         chat_id=query.from_user.id,
         title=f"VPN тариф: {plan['name']}",
-        description=f"{plan['duration_days']} дн. • {traffic_label(plan)} • {plan['devices_limit']} устройств",
+        description=f"{plan['duration_days']} дн. • {traffic_label(plan)} • {devices_label(plan)} устройств",
         payload=f"stars:{payment_id}",
         provider_token="",
         currency="XTR",
@@ -176,7 +185,7 @@ async def start_gift(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
     await query.answer()
     db = context.application.bot_data["db"]
-    plans = await db.list_plans(only_active=True)
+    plans = [plan for plan in await db.list_plans(only_active=True) if not is_admin_only_plan(plan)]
     buttons = [[InlineKeyboardButton(f"🎁 {plan['name']}", callback_data=f"shop:giftplan:{plan['id']}")] for plan in plans]
     buttons.append([InlineKeyboardButton("❌ Отмена", callback_data="profile")])
     await safe_edit(
@@ -216,6 +225,9 @@ async def receive_gift_recipient(update: Update, context: ContextTypes.DEFAULT_T
     db = context.application.bot_data["db"]
     plan = await db.get_plan(int(context.user_data["gift_plan_id"]))
     recipient = await db.get_user(beneficiary_id)
+    if not plan or is_admin_only_plan(plan):
+        await update.effective_message.reply_text("⚠️ Тариф недоступен.")
+        return ConversationHandler.END
     if not recipient:
         await update.effective_message.reply_text("⚠️ Получатель еще не запускал бота. Пусть сначала откроет его.")
         return WAIT_GIFT_RECIPIENT
