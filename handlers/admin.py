@@ -240,27 +240,46 @@ async def start_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await query.answer()
     await safe_edit(
         query,
-        "📣 <b>Рассылка</b>\n\nОтправьте текст сообщения для всех пользователей.",
+        "📣 <b>Рассылка</b>\n\n"
+        "Отправьте текст или фото с подписью.\n"
+        "Если отправите фото без подписи, пользователям уйдет только фото.",
         InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data="admin:menu")]]),
     )
     return WAIT_BROADCAST_TEXT
 
 
-async def receive_broadcast_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def receive_broadcast_content(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not await admin_guard(update, context):
         return ConversationHandler.END
-    text = (update.effective_message.text or "").strip()
-    context.user_data["broadcast_text"] = text
-    await update.effective_message.reply_text(
-        f"📣 <b>Предпросмотр рассылки</b>\n\n{text}",
-        parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup(
-            [
-                [InlineKeyboardButton("✅ Отправить всем", callback_data="admin:broadcast:send")],
-                [InlineKeyboardButton("❌ Отмена", callback_data="admin:menu")],
-            ]
-        ),
+    message = update.effective_message
+    keyboard = InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("✅ Отправить всем", callback_data="admin:broadcast:send")],
+            [InlineKeyboardButton("❌ Отмена", callback_data="admin:menu")],
+        ]
     )
+
+    if message.photo:
+        photo_id = message.photo[-1].file_id
+        caption = (message.caption or "").strip()
+        context.user_data["broadcast"] = {"type": "photo", "photo_id": photo_id, "caption": caption}
+        await message.reply_photo(
+            photo=photo_id,
+            caption=f"📣 <b>Предпросмотр рассылки</b>\n\n{caption}" if caption else "📣 <b>Предпросмотр рассылки</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboard,
+        )
+    else:
+        text = (message.text or "").strip()
+        if not text:
+            await message.reply_text("⚠️ Отправьте текст или фото.")
+            return WAIT_BROADCAST_TEXT
+        context.user_data["broadcast"] = {"type": "text", "text": text}
+        await message.reply_text(
+            f"📣 <b>Предпросмотр рассылки</b>\n\n{text}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboard,
+        )
     return ConversationHandler.END
 
 
@@ -270,19 +289,29 @@ async def send_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     query = update.callback_query
     await query.answer("Начинаю рассылку...")
     db = context.application.bot_data["db"]
-    text = context.user_data.get("broadcast_text")
-    if not text:
-        await safe_edit(query, "⚠️ Нет текста для рассылки.", admin_main_keyboard())
+    broadcast = context.user_data.get("broadcast") or {}
+    if not broadcast:
+        await safe_edit(query, "⚠️ Нет данных для рассылки.", admin_main_keyboard())
         return
     targets = await db.get_broadcast_targets()
     sent = 0
     for user_id in targets:
         try:
-            await context.bot.send_message(chat_id=user_id, text=text)
+            if broadcast.get("type") == "photo":
+                await context.bot.send_photo(
+                    chat_id=user_id,
+                    photo=broadcast["photo_id"],
+                    caption=broadcast.get("caption") or None,
+                    parse_mode=ParseMode.HTML if broadcast.get("caption") else None,
+                )
+            else:
+                await context.bot.send_message(chat_id=user_id, text=broadcast["text"], parse_mode=ParseMode.HTML)
             sent += 1
         except Exception:
             logger.exception("Не удалось отправить рассылку пользователю %s", user_id)
-    await db.save_broadcast(text, query.from_user.id)
+    saved_text = broadcast.get("caption") or broadcast.get("text") or "[photo]"
+    await db.save_broadcast(saved_text, query.from_user.id)
+    context.user_data.pop("broadcast", None)
     await safe_edit(query, f"✅ Рассылка завершена. Отправлено: {sent}/{len(targets)}.", admin_main_keyboard())
 
 
@@ -636,7 +665,7 @@ def get_handlers():
         ),
         ConversationHandler(
             entry_points=[CallbackQueryHandler(start_broadcast, pattern=r"^admin:broadcast$")],
-            states={WAIT_BROADCAST_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_broadcast_text)]},
+            states={WAIT_BROADCAST_TEXT: [MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND, receive_broadcast_content)]},
             fallbacks=[CallbackQueryHandler(cancel, pattern=r"^admin:menu$"), CommandHandler("start", cancel)],
             per_chat=True,
             per_user=True,

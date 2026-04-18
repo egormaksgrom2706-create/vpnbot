@@ -34,6 +34,11 @@ def is_admin_only_plan(plan) -> bool:
     return str(plan["name"]).lower().startswith("админ")
 
 
+def is_hidden_plan(plan) -> bool:
+    name = str(plan["name"]).lower()
+    return name.startswith("админ") or "проб" in name
+
+
 def plan_card(plan) -> str:
     return (
         f"💎 <b>{html.escape(plan['name'])}</b>\n\n"
@@ -53,7 +58,7 @@ async def show_plans(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     await query.answer()
     db = context.application.bot_data["db"]
-    plans = [plan for plan in await db.list_plans(only_active=True) if not is_admin_only_plan(plan)]
+    plans = [plan for plan in await db.list_plans(only_active=True) if not is_hidden_plan(plan)]
     buttons = [[InlineKeyboardButton(f"💎 {plan['name']} • {float(plan['price_usdt']):.2f} USDT", callback_data=f"shop:plan:{plan['id']}")] for plan in plans]
     buttons.append([InlineKeyboardButton("🔙 Личный кабинет", callback_data="profile")])
     await safe_edit(
@@ -70,7 +75,7 @@ async def show_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan_id:
     await query.answer()
     db = context.application.bot_data["db"]
     plan = await db.get_plan(plan_id)
-    if not plan or not plan["is_active"] or is_admin_only_plan(plan):
+    if not plan or not plan["is_active"] or is_hidden_plan(plan):
         await safe_edit(query, "⚠️ Тариф недоступен.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 К тарифам", callback_data="shop:plans")]]))
         return
     await safe_edit(
@@ -94,7 +99,7 @@ async def start_crypto_buy(update: Update, context: ContextTypes.DEFAULT_TYPE, p
     await query.answer("Создаю счет...")
     db = context.application.bot_data["db"]
     plan = await db.get_plan(plan_id)
-    if not plan or is_admin_only_plan(plan):
+    if not plan or is_hidden_plan(plan):
         await safe_edit(query, "⚠️ Тариф не найден.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="shop:plans")]]))
         return
 
@@ -146,7 +151,7 @@ async def start_stars_buy(update: Update, context: ContextTypes.DEFAULT_TYPE, pl
     db = context.application.bot_data["db"]
     settings = context.application.bot_data["settings"]
     plan = await db.get_plan(plan_id)
-    if not plan or is_admin_only_plan(plan):
+    if not plan or is_hidden_plan(plan):
         await safe_edit(query, "⚠️ Тариф не найден.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="shop:plans")]]))
         return
 
@@ -185,7 +190,7 @@ async def start_gift(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
     await query.answer()
     db = context.application.bot_data["db"]
-    plans = [plan for plan in await db.list_plans(only_active=True) if not is_admin_only_plan(plan)]
+    plans = [plan for plan in await db.list_plans(only_active=True) if not is_hidden_plan(plan)]
     buttons = [[InlineKeyboardButton(f"🎁 {plan['name']}", callback_data=f"shop:giftplan:{plan['id']}")] for plan in plans]
     buttons.append([InlineKeyboardButton("❌ Отмена", callback_data="profile")])
     await safe_edit(
@@ -225,7 +230,7 @@ async def receive_gift_recipient(update: Update, context: ContextTypes.DEFAULT_T
     db = context.application.bot_data["db"]
     plan = await db.get_plan(int(context.user_data["gift_plan_id"]))
     recipient = await db.get_user(beneficiary_id)
-    if not plan or is_admin_only_plan(plan):
+    if not plan or is_hidden_plan(plan):
         await update.effective_message.reply_text("⚠️ Тариф недоступен.")
         return ConversationHandler.END
     if not recipient:

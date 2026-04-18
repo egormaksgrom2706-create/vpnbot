@@ -73,6 +73,7 @@ async def main() -> None:
         .token(settings.bot_token)
         .request(telegram_request)
         .get_updates_request(telegram_updates_request)
+        .concurrent_updates(8)
         .build()
     )
     application.bot_data["settings"] = settings

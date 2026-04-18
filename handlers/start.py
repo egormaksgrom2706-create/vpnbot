@@ -345,7 +345,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     full_name = tg_user.full_name or tg_user.first_name or "Пользователь"
     user, _ = await db.upsert_user(tg_user.id, tg_user.username, full_name, referrer_id=referrer_id)
-    if not int(user["trial_used"] or 0):
+    active_subscription = await db.get_latest_active_subscription(tg_user.id)
+    if not active_subscription and not int(user["trial_used"] or 0):
         trial_plan = await db.get_trial_plan()
         if trial_plan:
             try:
