@@ -8,7 +8,6 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import (
     CallbackQueryHandler,
-    CommandHandler,
     ContextTypes,
     ConversationHandler,
     MessageHandler,
@@ -125,6 +124,7 @@ async def start_user_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     query = update.callback_query
     if not query:
         return ConversationHandler.END
+    context.user_data["admin_manual_action"] = "lookup_user_id"
     await query.answer()
     await safe_edit(
         query,
@@ -171,6 +171,7 @@ async def ask_balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     query = update.callback_query
     user_id = int((query.data or "").split(":")[3])
     context.user_data["admin_balance_user_id"] = user_id
+    context.user_data["admin_manual_action"] = "balance_amount"
     await query.answer()
     await safe_edit(
         query,
@@ -237,6 +238,7 @@ async def start_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if not await admin_guard(update, context):
         return ConversationHandler.END
     query = update.callback_query
+    context.user_data["admin_manual_action"] = "broadcast_content"
     await query.answer()
     await safe_edit(
         query,
@@ -436,6 +438,7 @@ async def view_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan_id:
                 [InlineKeyboardButton("✏️ Изменить цену", callback_data=f"admin:plan:price:{plan_id}")],
                 [InlineKeyboardButton("📦 Изменить трафик", callback_data=f"admin:plan:traffic:{plan_id}")],
                 [InlineKeyboardButton("✅ Активен / ❌ Отключён", callback_data=f"admin:plan:toggle:{plan_id}")],
+                [InlineKeyboardButton("🗑 Удалить тариф", callback_data=f"admin:plan:delete:{plan_id}")],
                 [InlineKeyboardButton("🔙 К тарифам", callback_data="admin:plans")],
             ]
         ),
@@ -450,12 +453,45 @@ async def toggle_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan_i
     await view_plan(update, context, plan_id)
 
 
+async def confirm_delete_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan_id: int) -> None:
+    if not await admin_guard(update, context):
+        return
+    query = update.callback_query
+    await query.answer()
+    db = context.application.bot_data["db"]
+    plan = await db.get_plan(plan_id)
+    if not plan:
+        await safe_edit(query, "⚠️ Тариф не найден.", admin_main_keyboard())
+        return
+    await safe_edit(
+        query,
+        f"🗑 <b>Удалить тариф?</b>\n\n{html.escape(plan['name'])}\n\nЭто действие нельзя отменить.",
+        InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("🗑 Да, удалить", callback_data=f"admin:plan:delete_confirm:{plan_id}")],
+                [InlineKeyboardButton("🔙 Назад", callback_data=f"admin:plan:view:{plan_id}")],
+            ]
+        ),
+    )
+
+
+async def delete_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan_id: int) -> None:
+    if not await admin_guard(update, context):
+        return
+    query = update.callback_query
+    await query.answer("Удаляю тариф...")
+    db = context.application.bot_data["db"]
+    await db.delete_plan(plan_id)
+    await safe_edit(query, "✅ Тариф удален.", admin_main_keyboard())
+
+
 async def ask_plan_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not await admin_guard(update, context):
         return ConversationHandler.END
     query = update.callback_query
     plan_id = int((query.data or "").split(":")[3])
     context.user_data["admin_plan_price_id"] = plan_id
+    context.user_data["admin_manual_action"] = "plan_price"
     await query.answer()
     await safe_edit(
         query,
@@ -487,6 +523,7 @@ async def ask_plan_traffic(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     query = update.callback_query
     plan_id = int((query.data or "").split(":")[3])
     context.user_data["admin_plan_traffic_id"] = plan_id
+    context.user_data["admin_manual_action"] = "plan_traffic"
     await query.answer()
     await safe_edit(
         query,
@@ -521,6 +558,7 @@ async def start_new_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return ConversationHandler.END
     query = update.callback_query
     await query.answer()
+    context.user_data["admin_manual_action"] = "new_plan_name"
     await safe_edit(query, "➕ Отправьте название нового тарифа.", InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data="admin:plans")]]))
     return WAIT_NEW_PLAN_NAME
 
@@ -596,7 +634,92 @@ async def manual_text_router(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not await admin_guard(update, context):
         return
     action = context.user_data.get("admin_manual_action")
-    if action != "grant_user_id":
+    if not action:
+        return
+
+    if action == "broadcast_content":
+        result = await receive_broadcast_content(update, context)
+        if result == ConversationHandler.END:
+            context.user_data.pop("admin_manual_action", None)
+        return
+
+    if action == "balance_amount":
+        result = await receive_balance(update, context)
+        if result == ConversationHandler.END:
+            context.user_data.pop("admin_manual_action", None)
+        return
+
+    if action == "plan_price":
+        result = await receive_plan_price(update, context)
+        if result == ConversationHandler.END:
+            context.user_data.pop("admin_manual_action", None)
+        return
+
+    if action == "plan_traffic":
+        result = await receive_plan_traffic(update, context)
+        if result == ConversationHandler.END:
+            context.user_data.pop("admin_manual_action", None)
+        return
+
+    if action == "new_plan_name":
+        context.user_data["new_plan_name"] = (update.effective_message.text or "").strip()
+        context.user_data["admin_manual_action"] = "new_plan_days"
+        await update.effective_message.reply_text("Укажите длительность в днях.")
+        return
+
+    if action == "new_plan_days":
+        text = (update.effective_message.text or "").strip()
+        if not text.isdigit():
+            await update.effective_message.reply_text("⚠️ Нужны целые дни.")
+            return
+        context.user_data["new_plan_days"] = int(text)
+        context.user_data["admin_manual_action"] = "new_plan_price"
+        await update.effective_message.reply_text("Укажите цену в USDT.")
+        return
+
+    if action == "new_plan_price":
+        text = (update.effective_message.text or "").strip().replace(",", ".")
+        try:
+            context.user_data["new_plan_price"] = float(text)
+        except ValueError:
+            await update.effective_message.reply_text("⚠️ Нужна цена числом.")
+            return
+        context.user_data["admin_manual_action"] = "new_plan_traffic"
+        await update.effective_message.reply_text("Укажите лимит трафика в ГБ. 0 или безлимит — безлимитный тариф.")
+        return
+
+    if action == "new_plan_traffic":
+        text = (update.effective_message.text or "").strip()
+        normalized = text.lower()
+        if normalized in {"0", "безлимит", "unlimited", "limitless"}:
+            context.user_data["new_plan_traffic"] = 0
+        elif text.isdigit():
+            context.user_data["new_plan_traffic"] = int(text)
+        else:
+            await update.effective_message.reply_text("⚠️ Нужен целый лимит трафика, либо 0/безлимит.")
+            return
+        context.user_data["admin_manual_action"] = "new_plan_devices"
+        await update.effective_message.reply_text("Укажите лимит устройств.")
+        return
+
+    if action == "new_plan_devices":
+        text = (update.effective_message.text or "").strip()
+        if not text.isdigit():
+            await update.effective_message.reply_text("⚠️ Нужен целый лимит устройств.")
+            return
+        db = context.application.bot_data["db"]
+        await db.create_plan(
+            context.user_data["new_plan_name"],
+            int(context.user_data["new_plan_days"]),
+            float(context.user_data["new_plan_price"]),
+            int(context.user_data["new_plan_traffic"]),
+            int(text),
+        )
+        context.user_data.pop("admin_manual_action", None)
+        await update.effective_message.reply_text("✅ Новый тариф создан.")
+        return
+
+    if action not in {"grant_user_id", "lookup_user_id"}:
         return
 
     text = (update.effective_message.text or "").strip()
@@ -606,6 +729,19 @@ async def manual_text_router(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     context.user_data.pop("admin_manual_action", None)
     user_id = int(text)
+    if action == "lookup_user_id":
+        db = context.application.bot_data["db"]
+        user = await db.get_user_with_stats(user_id)
+        if not user:
+            await update.effective_message.reply_text("⚠️ Пользователь не найден.")
+            return
+        await update.effective_message.reply_text(
+            user_card_text(user),
+            parse_mode=ParseMode.HTML,
+            reply_markup=user_card_keyboard(user_id, bool(user["is_banned"])),
+        )
+        return
+
     context.user_data["admin_grant_user_id"] = user_id
     await update.effective_message.reply_text(
         "Выберите тариф для мгновенной выдачи:",
@@ -622,6 +758,15 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     data = query.data or ""
     if data == "admin:menu":
         await show_admin_menu(update, context)
+        return
+    if data == "admin:users":
+        await start_user_lookup(update, context)
+        return
+    if data == "admin:grant":
+        await start_grant(update, context)
+        return
+    if data == "admin:broadcast":
+        await start_broadcast(update, context)
         return
     if data == "admin:broadcast:send":
         await send_broadcast(update, context)
@@ -641,6 +786,9 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if data.startswith("admin:user:grant:"):
         await start_grant_for_user(update, context, int(data.split(":")[3]))
         return
+    if data.startswith("admin:user:balance:"):
+        await ask_balance(update, context)
+        return
     if data.startswith("admin:grant:plan:"):
         _, _, _, raw_user_id, raw_plan_id = data.split(":")
         await confirm_grant(update, context, int(raw_user_id), int(raw_plan_id))
@@ -648,68 +796,28 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if data.startswith("admin:plan:view:"):
         await view_plan(update, context, int(data.split(":")[3]))
         return
+    if data.startswith("admin:plan:price:"):
+        await ask_plan_price(update, context)
+        return
+    if data.startswith("admin:plan:traffic:"):
+        await ask_plan_traffic(update, context)
+        return
+    if data == "admin:plan:new":
+        await start_new_plan(update, context)
+        return
     if data.startswith("admin:plan:toggle:"):
         await toggle_plan(update, context, int(data.split(":")[3]))
+        return
+    if data.startswith("admin:plan:delete_confirm:"):
+        await delete_plan(update, context, int(data.split(":")[3]))
+        return
+    if data.startswith("admin:plan:delete:"):
+        await confirm_delete_plan(update, context, int(data.split(":")[3]))
         return
 
 
 def get_handlers():
     return [
-        CallbackQueryHandler(callback_router, pattern=r"^(admin:menu|admin:broadcast:send|admin:plans|admin:user:show:\d+|admin:user:toggle:\d+|admin:user:history:\d+|admin:user:grant:\d+|admin:grant:plan:\d+:\d+|admin:plan:view:\d+|admin:plan:toggle:\d+)$"),
-        ConversationHandler(
-            entry_points=[CallbackQueryHandler(start_user_lookup, pattern=r"^admin:users$")],
-            states={WAIT_USER_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_user_lookup)]},
-            fallbacks=[CallbackQueryHandler(cancel, pattern=r"^admin:menu$"), CommandHandler("start", cancel)],
-            per_chat=True,
-            per_user=True,
-        ),
-        ConversationHandler(
-            entry_points=[CallbackQueryHandler(start_broadcast, pattern=r"^admin:broadcast$")],
-            states={WAIT_BROADCAST_TEXT: [MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND, receive_broadcast_content)]},
-            fallbacks=[CallbackQueryHandler(cancel, pattern=r"^admin:menu$"), CommandHandler("start", cancel)],
-            per_chat=True,
-            per_user=True,
-        ),
-        ConversationHandler(
-            entry_points=[CallbackQueryHandler(start_grant, pattern=r"^admin:grant$")],
-            states={WAIT_GRANT_USER_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_grant_user)]},
-            fallbacks=[CallbackQueryHandler(cancel, pattern=r"^admin:menu$"), CommandHandler("start", cancel)],
-            per_chat=True,
-            per_user=True,
-        ),
-        ConversationHandler(
-            entry_points=[CallbackQueryHandler(ask_balance, pattern=r"^admin:user:balance:\d+$")],
-            states={WAIT_BALANCE_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_balance)]},
-            fallbacks=[CallbackQueryHandler(cancel, pattern=r"^admin:menu$"), CommandHandler("start", cancel)],
-            per_chat=True,
-            per_user=True,
-        ),
-        ConversationHandler(
-            entry_points=[CallbackQueryHandler(ask_plan_price, pattern=r"^admin:plan:price:\d+$")],
-            states={WAIT_PLAN_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_plan_price)]},
-            fallbacks=[CallbackQueryHandler(cancel, pattern=r"^admin:plans$"), CommandHandler("start", cancel)],
-            per_chat=True,
-            per_user=True,
-        ),
-        ConversationHandler(
-            entry_points=[CallbackQueryHandler(ask_plan_traffic, pattern=r"^admin:plan:traffic:\d+$")],
-            states={WAIT_PLAN_TRAFFIC: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_plan_traffic)]},
-            fallbacks=[CallbackQueryHandler(cancel, pattern=r"^admin:plans$"), CommandHandler("start", cancel)],
-            per_chat=True,
-            per_user=True,
-        ),
-        ConversationHandler(
-            entry_points=[CallbackQueryHandler(start_new_plan, pattern=r"^admin:plan:new$")],
-            states={
-                WAIT_NEW_PLAN_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, new_plan_name)],
-                WAIT_NEW_PLAN_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, new_plan_days)],
-                WAIT_NEW_PLAN_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, new_plan_price)],
-                WAIT_NEW_PLAN_TRAFFIC: [MessageHandler(filters.TEXT & ~filters.COMMAND, new_plan_traffic)],
-                WAIT_NEW_PLAN_DEVICES: [MessageHandler(filters.TEXT & ~filters.COMMAND, new_plan_devices)],
-            },
-            fallbacks=[CallbackQueryHandler(cancel, pattern=r"^admin:plans$"), CommandHandler("start", cancel)],
-            per_chat=True,
-            per_user=True,
-        ),
-        MessageHandler(filters.TEXT & ~filters.COMMAND, manual_text_router),
+        CallbackQueryHandler(callback_router, pattern=r"^(admin:menu|admin:users|admin:grant|admin:broadcast|admin:broadcast:send|admin:plans|admin:user:show:\d+|admin:user:toggle:\d+|admin:user:history:\d+|admin:user:grant:\d+|admin:user:balance:\d+|admin:grant:plan:\d+:\d+|admin:plan:view:\d+|admin:plan:price:\d+|admin:plan:traffic:\d+|admin:plan:new|admin:plan:toggle:\d+|admin:plan:delete:\d+|admin:plan:delete_confirm:\d+)$"),
+        MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND, manual_text_router),
     ]

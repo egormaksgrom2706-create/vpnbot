@@ -63,7 +63,8 @@ class Database:
                     price_usdt REAL,
                     traffic_gb INTEGER,
                     devices_limit INTEGER,
-                    is_active INTEGER DEFAULT 1
+                    is_active INTEGER DEFAULT 1,
+                    is_deleted INTEGER DEFAULT 0
                 );
 
                 CREATE TABLE IF NOT EXISTS subscriptions (
@@ -118,6 +119,7 @@ class Database:
             await self._ensure_column(db, "users", "withdraw_method", "TEXT")
             await self._ensure_column(db, "users", "withdraw_details", "TEXT")
             await self._ensure_column(db, "users", "trial_used", "INTEGER DEFAULT 0")
+            await self._ensure_column(db, "plans", "is_deleted", "INTEGER DEFAULT 0")
             await self._seed_plans(db)
             await db.commit()
 
@@ -143,8 +145,8 @@ class Database:
         for name, duration, price, traffic, devices, is_active in DEFAULT_PLANS:
             await db.execute(
                 """
-                INSERT INTO plans (name, duration_days, price_usdt, traffic_gb, devices_limit, is_active)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO plans (name, duration_days, price_usdt, traffic_gb, devices_limit, is_active, is_deleted)
+                VALUES (?, ?, ?, ?, ?, ?, 0)
                 ON CONFLICT(name) DO NOTHING
                 """,
                 (name, duration, price, traffic, devices, is_active),
@@ -241,17 +243,17 @@ class Database:
             await db.commit()
 
     async def list_plans(self, only_active: bool = False) -> list[aiosqlite.Row]:
-        query = "SELECT * FROM plans"
+        query = "SELECT * FROM plans WHERE is_deleted = 0"
         params: tuple[Any, ...] = ()
         if only_active:
-            query += " WHERE is_active = 1"
+            query += " AND is_active = 1"
         query += " ORDER BY price_usdt ASC, duration_days ASC"
         async with self.connect() as db:
             return await self._fetchall(db, query, params)
 
     async def get_plan(self, plan_id: int) -> aiosqlite.Row | None:
         async with self.connect() as db:
-            return await self._fetchone(db, "SELECT * FROM plans WHERE id = ?", (plan_id,))
+            return await self._fetchone(db, "SELECT * FROM plans WHERE id = ? AND is_deleted = 0", (plan_id,))
 
     async def set_plan_price(self, plan_id: int, price_usdt: float) -> None:
         async with self.connect() as db:
@@ -282,6 +284,11 @@ class Database:
                 "UPDATE plans SET is_active = CASE WHEN is_active = 1 THEN 0 ELSE 1 END WHERE id = ?",
                 (plan_id,),
             )
+            await db.commit()
+
+    async def delete_plan(self, plan_id: int) -> None:
+        async with self.connect() as db:
+            await db.execute("UPDATE plans SET is_deleted = 1, is_active = 0 WHERE id = ?", (plan_id,))
             await db.commit()
 
     async def create_plan(self, name: str, duration_days: int, price_usdt: float, traffic_gb: int, devices_limit: int) -> None:
