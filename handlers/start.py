@@ -532,19 +532,37 @@ async def delete_key(update: Update, context: ContextTypes.DEFAULT_TYPE, subscri
     query = update.callback_query
     if not query:
         return
-    await query.answer()
+    await query.answer("Удаляю профиль...")
     db = context.application.bot_data["db"]
+    remna = context.application.bot_data["remna"]
     subscription = await db.get_subscription(subscription_id)
     if not subscription or int(subscription["user_id"]) != query.from_user.id:
         await safe_edit(query, "⚠️ Подписка не найдена.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="subs:list")]]))
         return
-    await db.deactivate_subscription(subscription_id)
+
+    try:
+        if subscription["remna_sub_id"]:
+            await remna.delete_user(str(subscription["remna_sub_id"]))
+        await db.archive_subscription(subscription_id)
+    except Exception:
+        logger.exception("Не удалось удалить профиль подписки %s в панели", subscription_id)
+        await safe_edit(
+            query,
+            "⚠️ Не удалось удалить профиль в панели. Попробуйте позже или обратитесь в поддержку.",
+            InlineKeyboardMarkup(
+                [
+                    [InlineKeyboardButton("⚠️ Техподдержка", url=context.application.bot_data["settings"].support_link)],
+                    [InlineKeyboardButton("🔙 К подписке", callback_data=f"subs:open:{subscription_id}")],
+                ]
+            ),
+        )
+        return
+
     await safe_edit(
         query,
-        "❌ Ключ скрыт в боте и помечен как неактивный.\nЕсли нужно удалить подписку в панели полностью, напишите в техподдержку.",
+        "✅ Профиль удалён.\nПодписка забрана из бота и пользователь панели удалён.",
         InlineKeyboardMarkup(
             [
-                [InlineKeyboardButton("⚠️ Техподдержка", url=context.application.bot_data["settings"].support_link)],
                 [InlineKeyboardButton("🔙 Личный кабинет", callback_data="profile")],
             ]
         ),

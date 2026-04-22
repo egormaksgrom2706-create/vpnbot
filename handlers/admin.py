@@ -15,7 +15,7 @@ from telegram.ext import (
 )
 
 from handlers.payments import activate_plan
-from handlers.start import safe_edit
+from handlers.start import format_devices_limit, format_expiration, format_traffic_limit, safe_edit
 
 
 logger = logging.getLogger(__name__)
@@ -112,9 +112,22 @@ def user_card_keyboard(user_id: int, is_banned: bool) -> InlineKeyboardMarkup:
             [InlineKeyboardButton("✅ Разблокировать" if is_banned else "🚫 Заблокировать", callback_data=f"admin:user:toggle:{user_id}")],
             [InlineKeyboardButton("💰 Изменить баланс", callback_data=f"admin:user:balance:{user_id}")],
             [InlineKeyboardButton("🎁 Выдать подписку", callback_data=f"admin:user:grant:{user_id}")],
+            [InlineKeyboardButton("🗑 Забрать подписку", callback_data=f"admin:user:subs:{user_id}")],
             [InlineKeyboardButton("📋 История покупок", callback_data=f"admin:user:history:{user_id}")],
             [InlineKeyboardButton("🔙 Назад", callback_data="admin:menu")],
         ]
+    )
+
+
+def subscription_action_text(user, subscription) -> str:
+    return (
+        "🗑 <b>Изъятие подписки</b>\n\n"
+        f"Пользователь: {html.escape(user['full_name'] or 'Без имени')} (<code>{user['id']}</code>)\n"
+        f"Тариф: <b>{html.escape(subscription['plan_name'])}</b>\n"
+        f"Истекает: {format_expiration(subscription['expires_at'], subscription['duration_days'])}\n"
+        f"Трафик: {format_traffic_limit(subscription['traffic_limit_gb'])}\n"
+        f"Устройства: {format_devices_limit(subscription['devices_limit'])}\n\n"
+        "После подтверждения профиль будет удалён в панели RemnaWave."
     )
 
 
@@ -232,6 +245,137 @@ async def show_user_from_callback(update: Update, context: ContextTypes.DEFAULT_
         await safe_edit(query, "⚠️ Пользователь не найден.", admin_main_keyboard())
         return
     await safe_edit(query, user_card_text(user), user_card_keyboard(user_id, bool(user["is_banned"])))
+
+
+async def show_user_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
+    if not await admin_guard(update, context):
+        return
+    query = update.callback_query
+    await query.answer()
+    db = context.application.bot_data["db"]
+    user = await db.get_user_with_stats(user_id)
+    if not user:
+        await safe_edit(query, "⚠️ Пользователь не найден.", admin_main_keyboard())
+        return
+
+    subscriptions = await db.list_user_subscriptions(user_id, only_active=True)
+    if not subscriptions:
+        await safe_edit(
+            query,
+            "🗑 <b>Изъятие подписки</b>\n\nУ пользователя нет активных подписок.",
+            InlineKeyboardMarkup([[InlineKeyboardButton("🔙 К пользователю", callback_data=f"admin:user:show:{user_id}")]]),
+        )
+        return
+
+    lines = [
+        "🗑 <b>Выберите подписку для изъятия</b>\n",
+        f"Пользователь: {html.escape(user['full_name'] or 'Без имени')} (<code>{user['id']}</code>)",
+        "",
+    ]
+    buttons: list[list[InlineKeyboardButton]] = []
+    for subscription in subscriptions:
+        expires_at = format_expiration(subscription["expires_at"], subscription["duration_days"])
+        lines.append(f"• #{subscription['id']} — {html.escape(subscription['plan_name'])} — {expires_at}")
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    f"🗑 Забрать: {subscription['plan_name']}",
+                    callback_data=f"admin:user:take:{user_id}:{subscription['id']}",
+                )
+            ]
+        )
+
+    buttons.append([InlineKeyboardButton("🔙 К пользователю", callback_data=f"admin:user:show:{user_id}")])
+    await safe_edit(query, "\n".join(lines), InlineKeyboardMarkup(buttons))
+
+
+async def confirm_take_subscription(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    subscription_id: int,
+) -> None:
+    if not await admin_guard(update, context):
+        return
+    query = update.callback_query
+    await query.answer()
+    db = context.application.bot_data["db"]
+    user = await db.get_user_with_stats(user_id)
+    subscription = await db.get_subscription(subscription_id)
+    if not user or not subscription or int(subscription["user_id"]) != user_id or not int(subscription["is_active"] or 0):
+        await safe_edit(
+            query,
+            "⚠️ Активная подписка не найдена.",
+            InlineKeyboardMarkup([[InlineKeyboardButton("🔙 К подпискам", callback_data=f"admin:user:subs:{user_id}")]]),
+        )
+        return
+
+    await safe_edit(
+        query,
+        subscription_action_text(user, subscription),
+        InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("🗑 Подтвердить изъятие", callback_data=f"admin:user:take_confirm:{user_id}:{subscription_id}")],
+                [InlineKeyboardButton("🔙 К подпискам", callback_data=f"admin:user:subs:{user_id}")],
+            ]
+        ),
+    )
+
+
+async def take_subscription(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+    subscription_id: int,
+) -> None:
+    if not await admin_guard(update, context):
+        return
+    query = update.callback_query
+    await query.answer("Удаляю профиль...")
+    db = context.application.bot_data["db"]
+    remna = context.application.bot_data["remna"]
+    user = await db.get_user_with_stats(user_id)
+    subscription = await db.get_subscription(subscription_id)
+    if not user or not subscription or int(subscription["user_id"]) != user_id or not int(subscription["is_active"] or 0):
+        await safe_edit(
+            query,
+            "⚠️ Активная подписка не найдена.",
+            InlineKeyboardMarkup([[InlineKeyboardButton("🔙 К пользователю", callback_data=f"admin:user:show:{user_id}")]]),
+        )
+        return
+
+    try:
+        if subscription["remna_sub_id"]:
+            await remna.delete_user(str(subscription["remna_sub_id"]))
+        await db.archive_subscription(subscription_id)
+    except Exception:
+        logger.exception("Не удалось изъять подписку %s у пользователя %s", subscription_id, user_id)
+        await safe_edit(
+            query,
+            "⚠️ Не удалось удалить профиль в панели RemnaWave. Попробуйте позже.",
+            InlineKeyboardMarkup(
+                [
+                    [InlineKeyboardButton("🔁 Повторить", callback_data=f"admin:user:take:{user_id}:{subscription_id}")],
+                    [InlineKeyboardButton("🔙 К подпискам", callback_data=f"admin:user:subs:{user_id}")],
+                ]
+            ),
+        )
+        return
+
+    await safe_edit(
+        query,
+        (
+            "✅ <b>Подписка забрана</b>\n\n"
+            f"У пользователя <code>{user_id}</code> удалён профиль <b>{html.escape(subscription['plan_name'])}</b> "
+            "и запись деактивирована в боте."
+        ),
+        InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("🗑 Остальные подписки", callback_data=f"admin:user:subs:{user_id}")],
+                [InlineKeyboardButton("🔙 К пользователю", callback_data=f"admin:user:show:{user_id}")],
+            ]
+        ),
+    )
 
 
 async def start_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -777,6 +921,9 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if data.startswith("admin:user:show:"):
         await show_user_from_callback(update, context, int(data.split(":")[3]))
         return
+    if data.startswith("admin:user:subs:"):
+        await show_user_subscriptions(update, context, int(data.split(":")[3]))
+        return
     if data.startswith("admin:user:toggle:"):
         await toggle_user(update, context, int(data.split(":")[3]))
         return
@@ -785,6 +932,14 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
     if data.startswith("admin:user:grant:"):
         await start_grant_for_user(update, context, int(data.split(":")[3]))
+        return
+    if data.startswith("admin:user:take_confirm:"):
+        _, _, _, raw_user_id, raw_subscription_id = data.split(":")
+        await take_subscription(update, context, int(raw_user_id), int(raw_subscription_id))
+        return
+    if data.startswith("admin:user:take:"):
+        _, _, _, raw_user_id, raw_subscription_id = data.split(":")
+        await confirm_take_subscription(update, context, int(raw_user_id), int(raw_subscription_id))
         return
     if data.startswith("admin:user:balance:"):
         await ask_balance(update, context)
@@ -818,6 +973,6 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 def get_handlers():
     return [
-        CallbackQueryHandler(callback_router, pattern=r"^(admin:menu|admin:users|admin:grant|admin:broadcast|admin:broadcast:send|admin:plans|admin:user:show:\d+|admin:user:toggle:\d+|admin:user:history:\d+|admin:user:grant:\d+|admin:user:balance:\d+|admin:grant:plan:\d+:\d+|admin:plan:view:\d+|admin:plan:price:\d+|admin:plan:traffic:\d+|admin:plan:new|admin:plan:toggle:\d+|admin:plan:delete:\d+|admin:plan:delete_confirm:\d+)$"),
+        CallbackQueryHandler(callback_router, pattern=r"^(admin:menu|admin:users|admin:grant|admin:broadcast|admin:broadcast:send|admin:plans|admin:user:show:\d+|admin:user:subs:\d+|admin:user:toggle:\d+|admin:user:history:\d+|admin:user:grant:\d+|admin:user:take:\d+:\d+|admin:user:take_confirm:\d+:\d+|admin:user:balance:\d+|admin:grant:plan:\d+:\d+|admin:plan:view:\d+|admin:plan:price:\d+|admin:plan:traffic:\d+|admin:plan:new|admin:plan:toggle:\d+|admin:plan:delete:\d+|admin:plan:delete_confirm:\d+)$"),
         MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND, manual_text_router),
     ]

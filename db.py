@@ -436,6 +436,20 @@ class Database:
             await db.execute("UPDATE subscriptions SET is_active = 0 WHERE id = ?", (subscription_id,))
             await db.commit()
 
+    async def archive_subscription(self, subscription_id: int) -> None:
+        async with self.connect() as db:
+            await db.execute(
+                """
+                UPDATE subscriptions
+                SET is_active = 0,
+                    sub_key = NULL,
+                    remna_sub_id = NULL
+                WHERE id = ?
+                """,
+                (subscription_id,),
+            )
+            await db.commit()
+
     async def get_expiring_subscriptions(self, window_start: datetime, window_end: datetime) -> list[aiosqlite.Row]:
         async with self.connect() as db:
             return await self._fetchall(

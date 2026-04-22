@@ -188,6 +188,15 @@ class RemnaWaveClient:
             return self._normalize_user_response(data)
         raise RuntimeError("Unexpected RemnaWave revoke-subscription response")
 
+    async def delete_user(self, user_uuid: str) -> None:
+        response = await self._request("DELETE", f"/api/users/{user_uuid}", allow_empty_response=True)
+        response.raise_for_status()
+        if not response.text.strip():
+            return
+        data = self._unwrap_response(response)
+        if isinstance(data, dict) and data.get("isDeleted") is False:
+            raise RuntimeError(f"RemnaWave did not delete user {user_uuid}")
+
     async def get_user_devices(self, user_uuid: str) -> list[dict]:
         try:
             response = await self._request("GET", f"/api/hwid/devices/{user_uuid}")
@@ -202,6 +211,7 @@ class RemnaWaveClient:
             return []
 
     async def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
+        allow_empty_response = bool(kwargs.pop("allow_empty_response", False))
         urls = [self.base_url, *self.fallback_urls]
         last_error: Exception | None = None
         for index, url in enumerate(urls):
@@ -229,6 +239,8 @@ class RemnaWaveClient:
                 body = response.text.strip()
                 content_type = (response.headers.get("content-type") or "").lower()
                 if response.status_code == 204 or not body:
+                    if allow_empty_response and response.is_success:
+                        return response
                     last_error = RuntimeError(f"Empty response from {url}{path}")
                     logger.warning("RemnaWave %s %s returned empty response", url, path)
                     continue
