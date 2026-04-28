@@ -4,10 +4,11 @@ import html
 import io
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import qrcode
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Update
 from telegram.constants import ParseMode
 from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes
 
@@ -17,6 +18,14 @@ from remna import RemnaWaveClient
 
 logger = logging.getLogger(__name__)
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
+ASSETS_DIR = Path(__file__).resolve().parents[1] / "assets"
+SECTION_IMAGES = {
+    "profile": "profile.jpg",
+    "plans": "plans.jpg",
+    "devices": "devices.jpg",
+    "balance": "balance.jpg",
+}
+PHOTO_CAPTION_LIMIT = 1000
 MONTHS = {
     1: "января",
     2: "февраля",
@@ -73,6 +82,26 @@ def build_subscription_url(settings, sub_key: str | None) -> str:
     if not sub_key:
         return "не выдана"
     return RemnaWaveClient.build_subscription_url(settings.subscription_base_url, sub_key)
+
+
+def section_image_path(image_key: str | None) -> Path | None:
+    if not image_key:
+        return None
+    filename = SECTION_IMAGES.get(image_key)
+    if not filename:
+        return None
+    path = ASSETS_DIR / filename
+    return path if path.exists() else None
+
+
+def section_image_caption(image_key: str | None) -> str:
+    captions = {
+        "profile": "Личный кабинет",
+        "plans": "Тарифы",
+        "devices": "Устройства",
+        "balance": "Баланс",
+    }
+    return captions.get(image_key or "", "neChezzaBretto VPN")
 
 
 def format_traffic_limit(value) -> str:
@@ -283,6 +312,111 @@ async def safe_edit(query, text: str, markup: InlineKeyboardMarkup) -> None:
         await query.message.reply_text(text=text, reply_markup=markup, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
 
+async def safe_show(query, text: str, markup: InlineKeyboardMarkup, image_key: str | None = None) -> None:
+    image_path = section_image_path(image_key)
+    if not image_path:
+        await safe_edit(query, text, markup)
+        return
+
+    try:
+        with image_path.open("rb") as image:
+            caption = text if len(text) <= PHOTO_CAPTION_LIMIT else f"<b>{html.escape(section_image_caption(image_key))}</b>"
+            media = InputMediaPhoto(media=image, caption=caption, parse_mode=ParseMode.HTML)
+            if query.message and query.message.photo:
+                await query.edit_message_media(
+                    media=media,
+                    reply_markup=markup if len(text) <= PHOTO_CAPTION_LIMIT else None,
+                )
+            else:
+                await query.message.reply_photo(
+                    photo=image,
+                    caption=caption,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=markup if len(text) <= PHOTO_CAPTION_LIMIT else None,
+                )
+                try:
+                    await query.message.delete()
+                except Exception:
+                    logger.debug("Could not delete previous text message after sending section photo", exc_info=True)
+        if len(text) > PHOTO_CAPTION_LIMIT:
+            await query.message.get_bot().send_message(
+                chat_id=query.message.chat_id,
+                text=text,
+                reply_markup=markup,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
+    except Exception:
+        logger.exception("Could not show section image %s", image_path)
+        await safe_edit(query, text, markup)
+
+
+async def reply_panel(message, text: str, markup: InlineKeyboardMarkup, image_key: str | None = None) -> None:
+    image_path = section_image_path(image_key)
+    if not image_path:
+        await message.reply_text(text, reply_markup=markup, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+        return
+
+    try:
+        with image_path.open("rb") as image:
+            await message.reply_photo(
+                photo=image,
+                caption=text if len(text) <= PHOTO_CAPTION_LIMIT else f"<b>{html.escape(section_image_caption(image_key))}</b>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=markup if len(text) <= PHOTO_CAPTION_LIMIT else None,
+            )
+        if len(text) > PHOTO_CAPTION_LIMIT:
+            await message.reply_text(
+                text,
+                reply_markup=markup,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
+    except Exception:
+        logger.exception("Could not send section image %s", image_path)
+        await message.reply_text(text, reply_markup=markup, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+
+
+async def send_panel(bot, chat_id: int, text: str, markup: InlineKeyboardMarkup | None = None, image_key: str | None = None) -> None:
+    image_path = section_image_path(image_key)
+    if not image_path:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+            disable_web_page_preview=True,
+        )
+        return
+
+    try:
+        with image_path.open("rb") as image:
+            await bot.send_photo(
+                chat_id=chat_id,
+                photo=image,
+                caption=text if len(text) <= PHOTO_CAPTION_LIMIT else f"<b>{html.escape(section_image_caption(image_key))}</b>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=markup if len(text) <= PHOTO_CAPTION_LIMIT else None,
+            )
+        if len(text) > PHOTO_CAPTION_LIMIT:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=markup,
+                disable_web_page_preview=True,
+            )
+    except Exception:
+        logger.exception("Could not send section image %s", image_path)
+        await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=markup,
+            disable_web_page_preview=True,
+        )
+
+
 async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE, edit: bool = False) -> None:
     db = context.application.bot_data["db"]
     settings = context.application.bot_data["settings"]
@@ -296,9 +430,9 @@ async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE, edit:
     if user["is_banned"]:
         text = "⚠️ Ваш аккаунт заблокирован. Обратитесь в поддержку."
         if update.callback_query:
-            await safe_edit(update.callback_query, text, InlineKeyboardMarkup([[InlineKeyboardButton("⚠️ Техподдержка", url=settings.support_link)]]))
+            await safe_show(update.callback_query, text, InlineKeyboardMarkup([[InlineKeyboardButton("⚠️ Техподдержка", url=settings.support_link)]]), "profile")
         else:
-            await update.effective_message.reply_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⚠️ Техподдержка", url=settings.support_link)]]))
+            await reply_panel(update.effective_message, text, InlineKeyboardMarkup([[InlineKeyboardButton("⚠️ Техподдержка", url=settings.support_link)]]), "profile")
         return
 
     subscription = await db.get_latest_active_subscription(tg_user.id)
@@ -316,9 +450,9 @@ async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE, edit:
     keyboard = build_main_keyboard(settings, tg_user.id in settings.admin_ids)
     text = profile_text(user, subscription, settings)
     if edit and update.callback_query:
-        await safe_edit(update.callback_query, text, keyboard)
+        await safe_show(update.callback_query, text, keyboard, "profile")
     else:
-        await update.effective_message.reply_text(text, reply_markup=keyboard, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+        await reply_panel(update.effective_message, text, keyboard, "profile")
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -374,7 +508,7 @@ async def show_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE)
     db = context.application.bot_data["db"]
     rows = await db.list_user_subscriptions(query.from_user.id, only_active=True)
     if not rows:
-        await safe_edit(
+        await safe_show(
             query,
             "🌐 Активных подписок пока нет.\nВыберите тариф и оплатите его, чтобы получить ключ доступа.",
             InlineKeyboardMarkup(
@@ -383,15 +517,17 @@ async def show_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     [InlineKeyboardButton("🔙 Личный кабинет", callback_data="profile")],
                 ]
             ),
+            "plans",
         )
         return
 
     buttons = [[InlineKeyboardButton(f"🔑 {row['plan_name']}", callback_data=f"subs:open:{row['id']}")] for row in rows]
     buttons.append([InlineKeyboardButton("🔙 Личный кабинет", callback_data="profile")])
-    await safe_edit(
+    await safe_show(
         query,
         "🌐 <b>Мои подписки</b>\nВыберите подписку, чтобы посмотреть детали и управлять устройствами.",
         InlineKeyboardMarkup(buttons),
+        "profile",
     )
 
 
@@ -405,7 +541,7 @@ async def open_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     settings = context.application.bot_data["settings"]
     subscription = await db.get_subscription(subscription_id)
     if not subscription or int(subscription["user_id"]) != query.from_user.id:
-        await safe_edit(query, "⚠️ Подписка не найдена.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="subs:list")]]))
+        await safe_show(query, "⚠️ Подписка не найдена.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="subs:list")]]), "profile")
         return
 
     live_data = None
@@ -419,7 +555,7 @@ async def open_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     except Exception:
         logger.exception("Не удалось обновить статистику подписки %s", subscription_id)
 
-    await safe_edit(query, subscription_text(subscription, settings, live_data), build_subscription_keyboard(subscription_id))
+    await safe_show(query, subscription_text(subscription, settings, live_data), build_subscription_keyboard(subscription_id), "profile")
 
 
 async def show_devices(update: Update, context: ContextTypes.DEFAULT_TYPE, subscription_id: int | None = None) -> None:
@@ -436,17 +572,18 @@ async def show_devices(update: Update, context: ContextTypes.DEFAULT_TYPE, subsc
         subscription = await db.get_subscription(subscription_id)
 
     if not subscription:
-        await safe_edit(query, "📱 У вас нет активной подписки для просмотра устройств.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Личный кабинет", callback_data="profile")]]))
+        await safe_show(query, "📱 У вас нет активной подписки для просмотра устройств.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Личный кабинет", callback_data="profile")]]), "devices")
         return
 
     try:
         live_data = await remna.get_subscription(subscription["remna_sub_id"])
     except Exception:
         logger.exception("Не удалось получить устройства по подписке %s", subscription["id"])
-        await safe_edit(
+        await safe_show(
             query,
             "⚠️ Не удалось загрузить устройства. Попробуйте позже или обратитесь в поддержку.",
             InlineKeyboardMarkup([[InlineKeyboardButton("🔙 К подписке", callback_data=f"subs:open:{subscription['id']}")]]),
+            "devices",
         )
         return
 
@@ -466,7 +603,7 @@ async def show_devices(update: Update, context: ContextTypes.DEFAULT_TYPE, subsc
         for index, device in enumerate(devices)
     ]
     buttons.append([InlineKeyboardButton("🔙 К подписке", callback_data=f"subs:open:{subscription['id']}")])
-    await safe_edit(query, text, InlineKeyboardMarkup(buttons))
+    await safe_show(query, text, InlineKeyboardMarkup(buttons), "devices")
 
 
 async def connect_device(update: Update, context: ContextTypes.DEFAULT_TYPE, subscription_id: int) -> None:
@@ -478,10 +615,10 @@ async def connect_device(update: Update, context: ContextTypes.DEFAULT_TYPE, sub
     settings = context.application.bot_data["settings"]
     subscription = await db.get_subscription(subscription_id)
     if not subscription or int(subscription["user_id"]) != query.from_user.id:
-        await safe_edit(query, "⚠️ Подписка не найдена.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="subs:list")]]))
+        await safe_show(query, "⚠️ Подписка не найдена.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="subs:list")]]), "profile")
         return
     link = build_subscription_url(settings, subscription["sub_key"])
-    await safe_edit(
+    await safe_show(
         query,
         (
             "🛡️ <b>Подключение устройства</b>\n\n"
@@ -496,6 +633,7 @@ async def connect_device(update: Update, context: ContextTypes.DEFAULT_TYPE, sub
                 [InlineKeyboardButton("🔙 К подписке", callback_data=f"subs:open:{subscription_id}")],
             ]
         ),
+        "devices",
     )
 
 
@@ -508,7 +646,7 @@ async def show_qr(update: Update, context: ContextTypes.DEFAULT_TYPE, subscripti
     settings = context.application.bot_data["settings"]
     subscription = await db.get_subscription(subscription_id)
     if not subscription or int(subscription["user_id"]) != query.from_user.id:
-        await query.message.reply_text("⚠️ Подписка не найдена.")
+        await reply_panel(query.message, "⚠️ Подписка не найдена.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="subs:list")]]), "profile")
         return
 
     link = build_subscription_url(settings, subscription["sub_key"])
@@ -537,7 +675,7 @@ async def delete_key(update: Update, context: ContextTypes.DEFAULT_TYPE, subscri
     remna = context.application.bot_data["remna"]
     subscription = await db.get_subscription(subscription_id)
     if not subscription or int(subscription["user_id"]) != query.from_user.id:
-        await safe_edit(query, "⚠️ Подписка не найдена.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="subs:list")]]))
+        await safe_show(query, "⚠️ Подписка не найдена.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="subs:list")]]), "profile")
         return
 
     try:
@@ -546,7 +684,7 @@ async def delete_key(update: Update, context: ContextTypes.DEFAULT_TYPE, subscri
         await db.archive_subscription(subscription_id)
     except Exception:
         logger.exception("Не удалось удалить профиль подписки %s в панели", subscription_id)
-        await safe_edit(
+        await safe_show(
             query,
             "⚠️ Не удалось удалить профиль в панели. Попробуйте позже или обратитесь в поддержку.",
             InlineKeyboardMarkup(
@@ -555,10 +693,11 @@ async def delete_key(update: Update, context: ContextTypes.DEFAULT_TYPE, subscri
                     [InlineKeyboardButton("🔙 К подписке", callback_data=f"subs:open:{subscription_id}")],
                 ]
             ),
+            "profile",
         )
         return
 
-    await safe_edit(
+    await safe_show(
         query,
         "✅ Профиль удалён.\nПодписка забрана из бота и пользователь панели удалён.",
         InlineKeyboardMarkup(
@@ -566,6 +705,7 @@ async def delete_key(update: Update, context: ContextTypes.DEFAULT_TYPE, subscri
                 [InlineKeyboardButton("🔙 Личный кабинет", callback_data="profile")],
             ]
         ),
+        "profile",
     )
 
 
@@ -579,7 +719,7 @@ async def disconnect_device(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     settings = context.application.bot_data["settings"]
     subscription = await db.get_subscription(subscription_id)
     if not subscription or int(subscription["user_id"]) != query.from_user.id:
-        await safe_edit(query, "⚠️ Подписка не найдена.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="subs:list")]]))
+        await safe_show(query, "⚠️ Подписка не найдена.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="subs:list")]]), "profile")
         return
     try:
         stored_devices = context.user_data.get(f"devices:{subscription_id}") or []
@@ -592,15 +732,16 @@ async def disconnect_device(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             await db.update_subscription_key(subscription_id, new_sub_key)
     except Exception:
         logger.exception("Не удалось отключить устройство %s", device_id)
-        await safe_edit(
+        await safe_show(
             query,
             "⚠️ Не удалось отключить устройство и обновить ссылку. Попробуйте позже.",
             InlineKeyboardMarkup([[InlineKeyboardButton("🔙 К устройствам", callback_data=f"subs:devices:{subscription_id}")]]),
+            "devices",
         )
         return
 
     link = build_subscription_url(settings, new_sub_key)
-    await safe_edit(
+    await safe_show(
         query,
         (
             "✅ Устройство отвязано.\n\n"
@@ -613,6 +754,7 @@ async def disconnect_device(update: Update, context: ContextTypes.DEFAULT_TYPE, 
                 [InlineKeyboardButton("🔙 К подписке", callback_data=f"subs:open:{subscription_id}")],
             ]
         ),
+        "devices",
     )
 
 
@@ -632,7 +774,7 @@ async def show_balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if float(user["balance_rub"] or 0) >= 1000:
         buttons.append([InlineKeyboardButton("💸 Вывести средства", callback_data="ref:withdraw")])
     buttons.append([InlineKeyboardButton("🔙 Личный кабинет", callback_data="profile")])
-    await safe_edit(query, text, InlineKeyboardMarkup(buttons))
+    await safe_show(query, text, InlineKeyboardMarkup(buttons), "balance")
 
 
 async def share_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -644,10 +786,10 @@ async def share_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE)
     settings = context.application.bot_data["settings"]
     subscription = await db.get_latest_active_subscription(query.from_user.id)
     if not subscription:
-        await safe_edit(query, "🤝 Сначала оформите подписку, чтобы поделиться ключом.", InlineKeyboardMarkup([[InlineKeyboardButton("💎 Купить подписку", callback_data="shop:plans")], [InlineKeyboardButton("🔙 Личный кабинет", callback_data="profile")]]))
+        await safe_show(query, "🤝 Сначала оформите подписку, чтобы поделиться ключом.", InlineKeyboardMarkup([[InlineKeyboardButton("💎 Купить подписку", callback_data="shop:plans")], [InlineKeyboardButton("🔙 Личный кабинет", callback_data="profile")]]), "plans")
         return
     link = build_subscription_url(settings, subscription["sub_key"])
-    await safe_edit(
+    await safe_show(
         query,
         (
             "🤝 <b>Поделиться подпиской</b>\n\n"
@@ -660,6 +802,7 @@ async def share_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 [InlineKeyboardButton("🔙 Личный кабинет", callback_data="profile")],
             ]
         ),
+        "profile",
     )
 
 

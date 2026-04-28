@@ -9,7 +9,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackQueryHandler, ContextTypes, MessageHandler, PreCheckoutQueryHandler, filters
 
 from db import utcnow
-from handlers.start import build_subscription_url, format_datetime_moscow
+from handlers.start import build_subscription_url, format_datetime_moscow, safe_show, send_panel
 
 
 logger = logging.getLogger(__name__)
@@ -165,9 +165,11 @@ async def activate_plan(
         )
     except Exception:
         logger.exception("Ошибка выдачи подписки через RemnaWave пользователю %s", beneficiary_id)
-        await application.bot.send_message(
+        await send_panel(
+            application.bot,
             chat_id=beneficiary_id,
             text="⚠️ Ошибка при выдаче подписки. Обратитесь в поддержку.",
+            image_key="plans",
         )
         if payment_id:
             await db.update_payment_status(payment_id, "ERROR")
@@ -197,17 +199,20 @@ async def activate_plan(
         ref_user = await db.get_user(beneficiary_id)
         if bonus and ref_user and ref_user["referrer_id"]:
             try:
-                await application.bot.send_message(
-                    chat_id=int(ref_user["referrer_id"]),
-                    text=f"💰 Вам начислен реферальный бонус: {bonus:.2f} ₽",
+                await send_panel(
+                    application.bot,
+                    int(ref_user["referrer_id"]),
+                    f"💰 Вам начислен реферальный бонус: {bonus:.2f} ₽",
+                    image_key="balance",
                 )
             except Exception:
                 logger.exception("Не удалось уведомить реферера %s", ref_user["referrer_id"])
 
     link = build_subscription_url(settings, sub_key)
-    await application.bot.send_message(
-        chat_id=beneficiary_id,
-        text=(
+    await send_panel(
+        application.bot,
+        beneficiary_id,
+        (
             "✅ Подписка активирована!\n\n"
             f"Тариф: <b>{plan['name']}</b>\n"
             f"Ссылка: <code>{link}</code>\n"
@@ -215,18 +220,19 @@ async def activate_plan(
             f"Устройств: {devices_label(plan)}\n"
             f"До: {plan_expire_label(plan, expire_at)}"
         ),
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🌐 Мои подписки", callback_data=f"subs:open:{subscription_id}")]]),
+        InlineKeyboardMarkup([[InlineKeyboardButton("🌐 Мои подписки", callback_data=f"subs:open:{subscription_id}")]]),
+        "profile",
     )
     if payer_id and payer_id != beneficiary_id:
-        await application.bot.send_message(
-            chat_id=payer_id,
-            text=(
+        await send_panel(
+            application.bot,
+            payer_id,
+            (
                 "🎁 Подарочная подписка выдана.\n\n"
                 f"Получатель: <code>{beneficiary_id}</code>\n"
                 f"Тариф: <b>{plan['name']}</b>"
             ),
-            parse_mode="HTML",
+            image_key="plans",
         )
     return subscription_id
 
@@ -303,9 +309,11 @@ async def check_crypto_payment(update: Update, context: ContextTypes.DEFAULT_TYP
         source="cryptobot",
     )
     if subscription_id:
-        await query.edit_message_text(
-            text="✅ Оплата подтверждена. Подписка активирована.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🌐 Мои подписки", callback_data=f"subs:open:{subscription_id}")]]),
+        await safe_show(
+            query,
+            "✅ Оплата подтверждена. Подписка активирована.",
+            InlineKeyboardMarkup([[InlineKeyboardButton("🌐 Мои подписки", callback_data=f"subs:open:{subscription_id}")]]),
+            "plans",
         )
 
 

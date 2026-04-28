@@ -16,7 +16,7 @@ from telegram.ext import (
     filters,
 )
 
-from handlers.start import safe_edit
+from handlers.start import reply_panel, safe_show
 
 
 logger = logging.getLogger(__name__)
@@ -65,7 +65,7 @@ async def show_referral_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
             [InlineKeyboardButton("🔙 Назад", callback_data="profile")],
         ]
     )
-    await safe_edit(query, text, keyboard)
+    await safe_show(query, text, keyboard, "balance")
 
 
 async def send_referral_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -77,7 +77,7 @@ async def send_referral_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
     settings = context.application.bot_data["settings"]
     stats = await db.get_referral_stats(query.from_user.id)
     link = referral_link(settings, stats["partner_code"])
-    await safe_edit(
+    await safe_show(
         query,
         (
             "📨 <b>Пригласить друзей</b>\n\n"
@@ -90,6 +90,7 @@ async def send_referral_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 [InlineKeyboardButton("🔙 Партнерская программа", callback_data="ref:menu")],
             ]
         ),
+        "balance",
     )
 
 
@@ -132,14 +133,15 @@ async def start_withdraw_conversation(update: Update, context: ContextTypes.DEFA
     db = context.application.bot_data["db"]
     user = await db.get_user(query.from_user.id)
     if not user or float(user["balance_rub"] or 0) < 1000:
-        await safe_edit(
+        await safe_show(
             query,
             "⚠️ Вывод доступен только от 1000 ₽.\nПродолжайте приглашать друзей.",
             InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Партнерская программа", callback_data="ref:menu")]]),
+            "balance",
         )
         return ConversationHandler.END
 
-    await safe_edit(
+    await safe_show(
         query,
         (
             "💸 <b>Заявка на вывод</b>\n\n"
@@ -147,6 +149,7 @@ async def start_withdraw_conversation(update: Update, context: ContextTypes.DEFA
             "Например: <code>СБП +79990001122 Иван</code>"
         ),
         InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data="ref:menu")]]),
+        "balance",
     )
     return WAIT_WITHDRAW_DETAILS
 
@@ -157,7 +160,7 @@ async def save_withdraw_details(update: Update, context: ContextTypes.DEFAULT_TY
     text = (update.effective_message.text or "").strip()
     user = await db.get_user(update.effective_user.id)
     if not user or float(user["balance_rub"] or 0) < 1000:
-        await update.effective_message.reply_text("⚠️ Баланс ниже минимального порога для вывода.")
+        await reply_panel(update.effective_message, "⚠️ Баланс ниже минимального порога для вывода.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Партнерская программа", callback_data="ref:menu")]]), "balance")
         return ConversationHandler.END
 
     await db.set_withdraw_details(update.effective_user.id, text)
@@ -178,8 +181,11 @@ async def save_withdraw_details(update: Update, context: ContextTypes.DEFAULT_TY
             )
         except Exception:
             logger.exception("Не удалось уведомить администратора %s о выводе", admin_id)
-    await update.effective_message.reply_text(
-        "✅ Заявка на вывод создана. После проверки администратор свяжется с вами."
+    await reply_panel(
+        update.effective_message,
+        "✅ Заявка на вывод создана. После проверки администратор свяжется с вами.",
+        InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Партнерская программа", callback_data="ref:menu")]]),
+        "balance",
     )
     return ConversationHandler.END
 
@@ -188,7 +194,7 @@ async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE
     if update.callback_query:
         await show_referral_menu(update, context)
     else:
-        await update.effective_message.reply_text("Операция отменена.")
+        await reply_panel(update.effective_message, "Операция отменена.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Личный кабинет", callback_data="profile")]]), "profile")
     return ConversationHandler.END
 
 

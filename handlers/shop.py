@@ -14,7 +14,7 @@ from telegram.ext import (
 )
 
 from handlers.payments import create_crypto_invoice
-from handlers.start import safe_edit
+from handlers.start import reply_panel, safe_show
 
 
 WAIT_GIFT_RECIPIENT = 1
@@ -61,10 +61,11 @@ async def show_plans(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     plans = [plan for plan in await db.list_plans(only_active=True) if not is_hidden_plan(plan)]
     buttons = [[InlineKeyboardButton(f"💎 {plan['name']} • {float(plan['price_usdt']):.2f} USDT", callback_data=f"shop:plan:{plan['id']}")] for plan in plans]
     buttons.append([InlineKeyboardButton("🔙 Личный кабинет", callback_data="profile")])
-    await safe_edit(
+    await safe_show(
         query,
         "💎 <b>Выберите тариф</b>\n\nВсе тарифы выдаются автоматически после подтверждения оплаты.",
         InlineKeyboardMarkup(buttons),
+        "plans",
     )
 
 
@@ -76,9 +77,9 @@ async def show_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan_id:
     db = context.application.bot_data["db"]
     plan = await db.get_plan(plan_id)
     if not plan or not plan["is_active"] or is_hidden_plan(plan):
-        await safe_edit(query, "⚠️ Тариф недоступен.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 К тарифам", callback_data="shop:plans")]]))
+        await safe_show(query, "⚠️ Тариф недоступен.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 К тарифам", callback_data="shop:plans")]]), "plans")
         return
-    await safe_edit(
+    await safe_show(
         query,
         plan_card(plan),
         InlineKeyboardMarkup(
@@ -89,6 +90,7 @@ async def show_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan_id:
                 [InlineKeyboardButton("🔙 К тарифам", callback_data="shop:plans")],
             ]
         ),
+        "plans",
     )
 
 
@@ -100,7 +102,7 @@ async def start_crypto_buy(update: Update, context: ContextTypes.DEFAULT_TYPE, p
     db = context.application.bot_data["db"]
     plan = await db.get_plan(plan_id)
     if not plan or is_hidden_plan(plan):
-        await safe_edit(query, "⚠️ Тариф не найден.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="shop:plans")]]))
+        await safe_show(query, "⚠️ Тариф не найден.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="shop:plans")]]), "plans")
         return
 
     try:
@@ -111,7 +113,7 @@ async def start_crypto_buy(update: Update, context: ContextTypes.DEFAULT_TYPE, p
             beneficiary_id=beneficiary_id or query.from_user.id,
         )
     except Exception:
-        await safe_edit(
+        await safe_show(
             query,
             "⚠️ Не удалось создать счет CryptoBot. Проверьте настройки платежного токена или выберите Stars.",
             InlineKeyboardMarkup(
@@ -120,10 +122,11 @@ async def start_crypto_buy(update: Update, context: ContextTypes.DEFAULT_TYPE, p
                     [InlineKeyboardButton("🔙 К тарифам", callback_data="shop:plans")],
                 ]
             ),
+            "plans",
         )
         return
     target_text = "для себя" if not beneficiary_id or beneficiary_id == query.from_user.id else f"в подарок пользователю <code>{beneficiary_id}</code>"
-    await safe_edit(
+    await safe_show(
         query,
         (
             f"💎 <b>Счет создан</b>\n\n"
@@ -139,6 +142,7 @@ async def start_crypto_buy(update: Update, context: ContextTypes.DEFAULT_TYPE, p
                 [InlineKeyboardButton("🔙 К тарифам", callback_data="shop:plans")],
             ]
         ),
+        "plans",
     )
     context.user_data["last_crypto_payment_id"] = payment_id
 
@@ -152,7 +156,7 @@ async def start_stars_buy(update: Update, context: ContextTypes.DEFAULT_TYPE, pl
     settings = context.application.bot_data["settings"]
     plan = await db.get_plan(plan_id)
     if not plan or is_hidden_plan(plan):
-        await safe_edit(query, "⚠️ Тариф не найден.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="shop:plans")]]))
+        await safe_show(query, "⚠️ Тариф не найден.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="shop:plans")]]), "plans")
         return
 
     payload = {
@@ -177,10 +181,11 @@ async def start_stars_buy(update: Update, context: ContextTypes.DEFAULT_TYPE, pl
         currency="XTR",
         prices=[LabeledPrice(label=plan["name"], amount=stars_amount)],
     )
-    await safe_edit(
+    await safe_show(
         query,
         "⭐ <b>Счет в Stars отправлен</b>\n\nПодтвердите оплату во всплывающем окне Telegram.",
         InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Личный кабинет", callback_data="profile")]]),
+        "plans",
     )
 
 
@@ -193,10 +198,11 @@ async def start_gift(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     plans = [plan for plan in await db.list_plans(only_active=True) if not is_hidden_plan(plan)]
     buttons = [[InlineKeyboardButton(f"🎁 {plan['name']}", callback_data=f"shop:giftplan:{plan['id']}")] for plan in plans]
     buttons.append([InlineKeyboardButton("❌ Отмена", callback_data="profile")])
-    await safe_edit(
+    await safe_show(
         query,
         "🎁 <b>Подарить подписку</b>\n\nВыберите тариф для подарка.",
         InlineKeyboardMarkup(buttons),
+        "plans",
     )
     return ConversationHandler.END
 
@@ -208,7 +214,7 @@ async def ask_gift_recipient(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     plan_id = int((query.data or "").split(":")[2])
     context.user_data["gift_plan_id"] = plan_id
-    await safe_edit(
+    await safe_show(
         query,
         (
             "🎁 <b>Подарок</b>\n\n"
@@ -216,6 +222,7 @@ async def ask_gift_recipient(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "Получатель должен хотя бы один раз открыть бота через /start."
         ),
         InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data="profile")]]),
+        "plans",
     )
     return WAIT_GIFT_RECIPIENT
 
@@ -223,7 +230,7 @@ async def ask_gift_recipient(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def receive_gift_recipient(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = (update.effective_message.text or "").strip()
     if not text.isdigit():
-        await update.effective_message.reply_text("⚠️ Нужен числовой Telegram ID получателя.")
+        await reply_panel(update.effective_message, "⚠️ Нужен числовой Telegram ID получателя.", InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data="profile")]]), "plans")
         return WAIT_GIFT_RECIPIENT
 
     beneficiary_id = int(text)
@@ -231,36 +238,37 @@ async def receive_gift_recipient(update: Update, context: ContextTypes.DEFAULT_T
     plan = await db.get_plan(int(context.user_data["gift_plan_id"]))
     recipient = await db.get_user(beneficiary_id)
     if not plan or is_hidden_plan(plan):
-        await update.effective_message.reply_text("⚠️ Тариф недоступен.")
+        await reply_panel(update.effective_message, "⚠️ Тариф недоступен.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Личный кабинет", callback_data="profile")]]), "plans")
         return ConversationHandler.END
     if not recipient:
-        await update.effective_message.reply_text("⚠️ Получатель еще не запускал бота. Пусть сначала откроет его.")
+        await reply_panel(update.effective_message, "⚠️ Получатель еще не запускал бота. Пусть сначала откроет его.", InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data="profile")]]), "plans")
         return WAIT_GIFT_RECIPIENT
 
-    await update.effective_message.reply_text(
+    await reply_panel(
+        update.effective_message,
         text=(
             "🎁 <b>Подтвердите оплату подарка</b>\n\n"
             f"Получатель: <code>{beneficiary_id}</code>\n"
             f"Тариф: <b>{plan['name']}</b>\n"
             f"Стоимость: <b>{float(plan['price_usdt']):.2f} USDT</b>"
         ),
-        parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup(
+        markup=InlineKeyboardMarkup(
             [
                 [InlineKeyboardButton("💎 CryptoBot", callback_data=f"giftpay:crypto:{plan['id']}:{beneficiary_id}")],
                 [InlineKeyboardButton("⭐ Stars", callback_data=f"giftpay:stars:{plan['id']}:{beneficiary_id}")],
                 [InlineKeyboardButton("🔙 Личный кабинет", callback_data="profile")],
             ]
         ),
+        image_key="plans",
     )
     return ConversationHandler.END
 
 
 async def cancel_gift(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.callback_query:
-        await safe_edit(update.callback_query, "Операция отменена.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Личный кабинет", callback_data="profile")]]))
+        await safe_show(update.callback_query, "Операция отменена.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Личный кабинет", callback_data="profile")]]), "profile")
     else:
-        await update.effective_message.reply_text("Операция отменена.")
+        await reply_panel(update.effective_message, "Операция отменена.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Личный кабинет", callback_data="profile")]]), "profile")
     return ConversationHandler.END
 
 
