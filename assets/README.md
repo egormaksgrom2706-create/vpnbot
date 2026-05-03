@@ -1,13 +1,10 @@
-Put section images here with these exact names:
+﻿Section image files expected by the bot:
 
-- `profile.jpg` - personal cabinet image
-- `plans.jpg` - tariffs image
-- `subscriptions.jpg` - my subscriptions image
-- `gift.jpg` - gift subscription image
-- `balance.jpg` - balance image
-- `devices.jpg` - devices image
-- `share.jpg` - share subscription image
-- `referral.jpg` - referral program image
-- `balance.jpg` - balance image
-
-If a file is missing, the bot will send the old text-only message for that section.
+- profile.jpg - Личный кабинет
+- plans.jpg - Купить подписку / Тарифы
+- gift.jpg - Подарить
+- subscriptions.jpg - Мои подписки
+- devices.jpg - Устройства
+- balance.jpg - Баланс
+- share.jpg - Поделиться подпиской
+- referral.jpg - Партнерская программа

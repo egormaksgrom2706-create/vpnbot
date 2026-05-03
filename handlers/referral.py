@@ -65,7 +65,7 @@ async def show_referral_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
             [InlineKeyboardButton("🔙 Назад", callback_data="profile")],
         ]
     )
-    await safe_show(query, text, keyboard, "balance")
+    await safe_show(query, text, keyboard, "referral")
 
 
 async def send_referral_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -90,7 +90,7 @@ async def send_referral_link(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 [InlineKeyboardButton("🔙 Партнерская программа", callback_data="ref:menu")],
             ]
         ),
-        "balance",
+        "referral",
     )
 
 
@@ -137,7 +137,7 @@ async def start_withdraw_conversation(update: Update, context: ContextTypes.DEFA
             query,
             "⚠️ Вывод доступен только от 1000 ₽.\nПродолжайте приглашать друзей.",
             InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Партнерская программа", callback_data="ref:menu")]]),
-            "balance",
+            "referral",
         )
         return ConversationHandler.END
 
@@ -149,7 +149,7 @@ async def start_withdraw_conversation(update: Update, context: ContextTypes.DEFA
             "Например: <code>СБП +79990001122 Иван</code>"
         ),
         InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data="ref:menu")]]),
-        "balance",
+        "referral",
     )
     return WAIT_WITHDRAW_DETAILS
 
@@ -160,7 +160,7 @@ async def save_withdraw_details(update: Update, context: ContextTypes.DEFAULT_TY
     text = (update.effective_message.text or "").strip()
     user = await db.get_user(update.effective_user.id)
     if not user or float(user["balance_rub"] or 0) < 1000:
-        await reply_panel(update.effective_message, "⚠️ Баланс ниже минимального порога для вывода.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Партнерская программа", callback_data="ref:menu")]]), "balance")
+        await reply_panel(update.effective_message, "⚠️ Баланс ниже минимального порога для вывода.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Партнерская программа", callback_data="ref:menu")]]), "referral")
         return ConversationHandler.END
 
     await db.set_withdraw_details(update.effective_user.id, text)
@@ -185,7 +185,7 @@ async def save_withdraw_details(update: Update, context: ContextTypes.DEFAULT_TY
         update.effective_message,
         "✅ Заявка на вывод создана. После проверки администратор свяжется с вами.",
         InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Партнерская программа", callback_data="ref:menu")]]),
-        "balance",
+        "referral",
     )
     return ConversationHandler.END
 

@@ -267,15 +267,30 @@ class Database:
 
     async def get_trial_plan(self) -> aiosqlite.Row | None:
         async with self.connect() as db:
-            return await self._fetchone(
+            row = await self._fetchone(
                 db,
                 """
                 SELECT *
                 FROM plans
-                WHERE is_active = 1 AND duration_days = 3 AND price_usdt = 0
-                ORDER BY id ASC
+                WHERE duration_days = 3 AND price_usdt = 0 AND is_deleted = 0
+                ORDER BY is_active DESC, id ASC
                 LIMIT 1
                 """,
+            )
+            if row:
+                return row
+            await db.execute(
+                """
+                INSERT INTO plans (name, duration_days, price_usdt, traffic_gb, devices_limit, is_active, is_deleted)
+                VALUES (?, 3, 0, 10, 2, 0, 0)
+                ON CONFLICT(name) DO UPDATE SET is_deleted = 0
+                """,
+                ("\u041f\u0440\u043e\u0431\u043d\u044b\u0439 (3 \u0434\u043d\u044f)",),
+            )
+            await db.commit()
+            return await self._fetchone(
+                db,
+                "SELECT * FROM plans WHERE duration_days = 3 AND price_usdt = 0 AND is_deleted = 0 ORDER BY id ASC LIMIT 1",
             )
 
     async def toggle_plan(self, plan_id: int) -> None:

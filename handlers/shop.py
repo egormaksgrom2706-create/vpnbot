@@ -202,7 +202,7 @@ async def start_gift(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         query,
         "🎁 <b>Подарить подписку</b>\n\nВыберите тариф для подарка.",
         InlineKeyboardMarkup(buttons),
-        "plans",
+        "gift",
     )
     return ConversationHandler.END
 
@@ -222,7 +222,7 @@ async def ask_gift_recipient(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "Получатель должен хотя бы один раз открыть бота через /start."
         ),
         InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data="profile")]]),
-        "plans",
+        "gift",
     )
     return WAIT_GIFT_RECIPIENT
 
@@ -259,7 +259,7 @@ async def receive_gift_recipient(update: Update, context: ContextTypes.DEFAULT_T
                 [InlineKeyboardButton("🔙 Личный кабинет", callback_data="profile")],
             ]
         ),
-        image_key="plans",
+        image_key="gift",
     )
     return ConversationHandler.END
 

@@ -22,8 +22,12 @@ ASSETS_DIR = Path(__file__).resolve().parents[1] / "assets"
 SECTION_IMAGES = {
     "profile": "profile.jpg",
     "plans": "plans.jpg",
+    "gift": "gift.jpg",
+    "subscriptions": "subscriptions.jpg",
     "devices": "devices.jpg",
     "balance": "balance.jpg",
+    "share": "share.jpg",
+    "referral": "referral.jpg",
 }
 PHOTO_CAPTION_LIMIT = 1000
 MONTHS = {
@@ -480,7 +484,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     full_name = tg_user.full_name or tg_user.first_name or "Пользователь"
     user, _ = await db.upsert_user(tg_user.id, tg_user.username, full_name, referrer_id=referrer_id)
     active_subscription = await db.get_latest_active_subscription(tg_user.id)
-    if not active_subscription and not int(user["trial_used"] or 0):
+    active_expires = parse_dt(active_subscription["expires_at"]) if active_subscription else None
+    has_valid_subscription = bool(active_subscription and (active_expires is None or active_expires > utcnow()))
+    if not has_valid_subscription and not int(user["trial_used"] or 0):
         trial_plan = await db.get_trial_plan()
         if trial_plan:
             try:
@@ -517,7 +523,7 @@ async def show_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     [InlineKeyboardButton("🔙 Личный кабинет", callback_data="profile")],
                 ]
             ),
-            "plans",
+            "subscriptions",
         )
         return
 
@@ -527,7 +533,7 @@ async def show_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE)
         query,
         "🌐 <b>Мои подписки</b>\nВыберите подписку, чтобы посмотреть детали и управлять устройствами.",
         InlineKeyboardMarkup(buttons),
-        "profile",
+        "subscriptions",
     )
 
 
@@ -555,7 +561,7 @@ async def open_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     except Exception:
         logger.exception("Не удалось обновить статистику подписки %s", subscription_id)
 
-    await safe_show(query, subscription_text(subscription, settings, live_data), build_subscription_keyboard(subscription_id), "profile")
+    await safe_show(query, subscription_text(subscription, settings, live_data), build_subscription_keyboard(subscription_id), "subscriptions")
 
 
 async def show_devices(update: Update, context: ContextTypes.DEFAULT_TYPE, subscription_id: int | None = None) -> None:
@@ -786,7 +792,7 @@ async def share_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE)
     settings = context.application.bot_data["settings"]
     subscription = await db.get_latest_active_subscription(query.from_user.id)
     if not subscription:
-        await safe_show(query, "🤝 Сначала оформите подписку, чтобы поделиться ключом.", InlineKeyboardMarkup([[InlineKeyboardButton("💎 Купить подписку", callback_data="shop:plans")], [InlineKeyboardButton("🔙 Личный кабинет", callback_data="profile")]]), "plans")
+        await safe_show(query, "🤝 Сначала оформите подписку, чтобы поделиться ключом.", InlineKeyboardMarkup([[InlineKeyboardButton("💎 Купить подписку", callback_data="shop:plans")], [InlineKeyboardButton("🔙 Личный кабинет", callback_data="profile")]]), "share")
         return
     link = build_subscription_url(settings, subscription["sub_key"])
     await safe_show(
@@ -802,7 +808,7 @@ async def share_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 [InlineKeyboardButton("🔙 Личный кабинет", callback_data="profile")],
             ]
         ),
-        "profile",
+        "share",
     )
 
 
